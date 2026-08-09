@@ -1,4 +1,4 @@
-import type { Treatment } from "../types.js";
+import type { Treatment } from "../types";
 
 /**
  * Regelwerk für öffentlich bekannte Händler und Marken.

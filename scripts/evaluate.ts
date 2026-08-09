@@ -7,13 +7,13 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { parseCamt053 } from "../src/core/parsers/camt053.js";
-import { parseSwisscardCsv } from "../src/core/parsers/swisscard.js";
-import { categorize, emptyContext, needsReview, lerneAusHistorie } from "../src/core/categorize/engine.js";
-import { categoryLabel, CATEGORY_BY_SLUG } from "../src/core/categorize/categories.js";
-import { formatRappen } from "../src/core/money.js";
-import { merchantKey } from "../src/core/parsers/party.js";
-import type { ParsedTransaction } from "../src/core/types.js";
+import { parseCamt053 } from "../src/core/parsers/camt053";
+import { parseSwisscardCsv } from "../src/core/parsers/swisscard";
+import { categorize, emptyContext, needsReview, lerneAusHistorie } from "../src/core/categorize/engine";
+import { categoryLabel, CATEGORY_BY_SLUG } from "../src/core/categorize/categories";
+import { formatRappen } from "../src/core/money";
+import { merchantKey } from "../src/core/parsers/party";
+import type { ParsedTransaction } from "../src/core/types";
 
 const EINGANG = path.resolve(process.cwd(), "data/eingang");
 const alle: ParsedTransaction[] = [];

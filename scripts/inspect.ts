@@ -6,10 +6,10 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { parseCamt053 } from "../src/core/parsers/camt053.js";
-import { parseSwisscardCsv } from "../src/core/parsers/swisscard.js";
-import { formatRappen, sum } from "../src/core/money.js";
-import { brandKey } from "../src/core/parsers/party.js";
+import { parseCamt053 } from "../src/core/parsers/camt053";
+import { parseSwisscardCsv } from "../src/core/parsers/swisscard";
+import { formatRappen, sum } from "../src/core/money";
+import { brandKey } from "../src/core/parsers/party";
 
 const EINGANG = path.resolve(process.cwd(), "data/eingang");
 const files = fs.existsSync(EINGANG) ? fs.readdirSync(EINGANG) : [];

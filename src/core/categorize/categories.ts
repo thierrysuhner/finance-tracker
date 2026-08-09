@@ -1,4 +1,4 @@
-import type { CategoryDef } from "../types.js";
+import type { CategoryDef } from "../types";
 
 /**
  * Die Kategorien-Taxonomie.

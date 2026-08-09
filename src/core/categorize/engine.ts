@@ -1,8 +1,8 @@
-import type { CategorySuggestion, ParsedTransaction, Treatment } from "../types.js";
-import { merchantKey, brandKey } from "../parsers/party.js";
-import { median } from "../money.js";
-import { RULES, ISSUER_CATEGORY_MAP } from "./rules.js";
-import { CATEGORY_BY_SLUG } from "./categories.js";
+import type { CategorySuggestion, ParsedTransaction, Treatment } from "../types";
+import { merchantKey, brandKey } from "../parsers/party";
+import { median } from "../money";
+import { RULES, ISSUER_CATEGORY_MAP } from "./rules";
+import { CATEGORY_BY_SLUG } from "./categories";
 
 /**
  * Mehrstufige Kategorisierung.

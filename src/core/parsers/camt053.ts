@@ -1,7 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
-import { parseAmountToRappen } from "../money.js";
-import { extractParty } from "./party.js";
-import type { ParsedTransaction } from "../types.js";
+import { parseAmountToRappen } from "../money";
+import { extractParty } from "./party";
+import type { ParsedTransaction } from "../types";
 
 /**
  * Parser für ISO-20022 CAMT.053 Kontoauszüge (Bank-to-Customer Statement).

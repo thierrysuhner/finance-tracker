@@ -1,6 +1,6 @@
 import Papa from "papaparse";
-import { parseAmountToRappen } from "../money.js";
-import type { ParsedTransaction } from "../types.js";
+import { parseAmountToRappen } from "../money";
+import type { ParsedTransaction } from "../types";
 
 /**
  * Parser für den Transaktionsexport von Swisscard (Cashback/Visa/Mastercard).

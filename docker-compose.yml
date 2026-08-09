@@ -1,0 +1,21 @@
+services:
+  finanzen:
+    build: .
+    restart: unless-stopped
+    environment:
+      # Pflicht. Erzeugen mit:  openssl rand -base64 48
+      # Wird der Wert geändert, müssen sich alle Geräte neu anmelden.
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET fehlt - siehe .env.example}
+      DATABASE_PATH: /data/finance.db
+    volumes:
+      # Hier liegen deine Daten. Dieses Verzeichnis ist das, was du sichern
+      # musst — der Rest lässt sich jederzeit neu bauen.
+      - finanzen-daten:/data
+    ports:
+      # Nur an localhost gebunden. Nach aussen geht es über einen Reverse
+      # Proxy mit HTTPS (Caddy, nginx, Traefik). Ohne Verschlüsselung wandert
+      # sonst das Passwort im Klartext durchs Netz.
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  finanzen-daten:
