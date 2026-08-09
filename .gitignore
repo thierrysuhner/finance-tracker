@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────
+#  DATENSCHUTZ — NIEMALS ENTFERNEN
+#  Hier stehen die Regeln, die verhindern, dass echte
+#  Kontodaten (Namen, IBANs, Handynummern) im Git landen.
+# ─────────────────────────────────────────────────────────────
+
+# Alle echten Daten, Datenbank und Backups
+/data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Bank- und Kartenexporte, egal wo sie liegen
+*.xml
+*.csv
+!tests/fixtures/**/*.xml
+!tests/fixtures/**/*.csv
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# ─────────────────────────────────────────────────────────────
+
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+.DS_Store
+*.log
+npm-debug.log*
+.vscode/
+.idea/
+coverage/
