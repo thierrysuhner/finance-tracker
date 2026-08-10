@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+/*
+ * Designsystem.
+ *
+ * Die Diagrammfarben sind nicht nach Geschmack gewählt, sondern gegen
+ * Farbfehlsichtigkeit und Kontrast geprüft (OKLab-Abstand, WCAG). Die
+ * Zuordnung folgt der Bedeutung:
+ *
+ *   Blau   gebunden      — Miete, Versicherung: kurzfristig nicht änderbar
+ *   Aqua   nötig         — Essen, Mobilität: unvermeidbar, aber steuerbar
+ *   Orange freiwillig    — die Achse, an der sich wirklich etwas bewegen lässt
+ *
+ * Orange ist bewusst die auffälligste Farbe: dort liegt der Hebel.
+ */
+
+:root {
+  color-scheme: light;
+
+  --surface-0: #f6f6f4;
+  --surface-1: #fcfcfb;
+  --surface-2: #f0efec;
+  --border:    #e2e1dc;
+  --border-strong: #cbcac3;
+
+  --text-primary:   #14140f;
+  --text-secondary: #52514e;
+  --text-muted:     #78776f;
+
+  /* Notwendigkeitsstufen — geprüfte Kategorialpalette */
+  --n-fix:        #2a78d6;
+  --n-noetig:     #1baf7a;
+  --n-freiwillig: #eb6834;
+  --n-neutral:    #9d9c94;
+  --n-einkommen:  #008300;
+
+  --danger:  #d33a39;
+  --warning: #b47500;
+  --good:    #007a4d;
+
+  --radius: 12px;
+  --shadow: 0 1px 2px rgb(20 20 15 / 0.06), 0 4px 16px rgb(20 20 15 / 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --border:    #2f2f2d;
+    --border-strong: #454541;
+
+    --text-primary:   #f3f3ef;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #8f8e85;
+
+    --n-fix:        #3987e5;
+    --n-noetig:     #199e70;
+    --n-freiwillig: #d95926;
+    --n-neutral:    #7d7c75;
+    --n-einkommen:  #35a852;
+
+    --danger:  #e66767;
+    --warning: #d9a441;
+    --good:    #3fbf85;
+
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 20px rgb(0 0 0 / 0.25);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-0: #121211;
+  --surface-1: #1a1a19;
+  --surface-2: #232322;
+  --border:    #2f2f2d;
+  --border-strong: #454541;
+
+  --text-primary:   #f3f3ef;
+  --text-secondary: #c3c2b7;
+  --text-muted:     #8f8e85;
+
+  --n-fix:        #3987e5;
+  --n-noetig:     #199e70;
+  --n-freiwillig: #d95926;
+  --n-neutral:    #7d7c75;
+  --n-einkommen:  #35a852;
+
+  --danger:  #e66767;
+  --warning: #d9a441;
+  --good:    #3fbf85;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 20px rgb(0 0 0 / 0.25);
+}
+
+@theme inline {
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-line:      var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink:       var(--text-primary);
+  --color-ink-2:     var(--text-secondary);
+  --color-ink-3:     var(--text-muted);
+  --color-fix:        var(--n-fix);
+  --color-noetig:     var(--n-noetig);
+  --color-freiwillig: var(--n-freiwillig);
+  --color-neutral:    var(--n-neutral);
+  --color-einkommen:  var(--n-einkommen);
+  --color-danger:  var(--danger);
+  --color-warning: var(--warning);
+  --color-good:    var(--good);
+}
+
+* { border-color: var(--border); }
+
+body {
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Platz für die Navigationsleiste am unteren Rand auf dem Handy. */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Beträge brauchen gleiche Ziffernbreite, sonst springen die Spalten. */
+.tabular { font-variant-numeric: tabular-nums; }
+
+.karte {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* Fokus sichtbar halten — die App wird auch per Tastatur bedient. */
+:focus-visible {
+  outline: 2px solid var(--n-fix);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Recharts: Standardrahmen beim Fokus entfernen, eigener Fokusstil greift. */
+.recharts-wrapper:focus, .recharts-surface:focus { outline: none; }

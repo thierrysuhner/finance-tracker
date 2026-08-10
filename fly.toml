@@ -1,0 +1,64 @@
+# Deployment auf Fly.io.
+#
+# Warum nicht Vercel: dort ist das Dateisystem flüchtig. Die SQLite-Datei wäre
+# nach jedem Kaltstart leer. Fly.io hängt stattdessen ein echtes Volume ein,
+# wodurch die Anwendung unverändert bleiben kann.
+#
+# NICHT GRATIS: der dauerhafte Gratis-Tarif wurde im Oktober 2024 abgeschafft.
+# Mit den Einstellungen unten (Maschine stoppt bei Inaktivität, 1 GB Volume)
+# ist mit etwa 1 bis 3 Franken im Monat zu rechnen. Wer schon einen Server hat,
+# fährt mit docker-compose.yml günstiger und behält die Daten im eigenen Haus.
+#
+# Einrichtung (einmalig):
+#   fly launch --no-deploy --copy-config
+#   fly volumes create finanzen_daten --size 1 --region fra
+#   fly secrets set SESSION_SECRET="$(openssl rand -base64 48)"
+#   fly deploy
+#
+# Danach genügt bei jeder Änderung:  fly deploy
+
+app = "finanzen"
+primary_region = "fra"   # Frankfurt — nächstgelegene EU-Region
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Zeigt ins Volume, nicht ins Image. Ohne diese Zeile läge die Datenbank im
+  # Container und wäre bei jedem Deploy weg.
+  DATABASE_PATH = "/data/finance.db"
+  PORT = "3000"
+
+[[mounts]]
+  source = "finanzen_daten"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Ohne Verschlüsselung wanderte das Passwort im Klartext durchs Netz.
+
+  auto_stop_machines = "stop"
+  # Bei einem Einzelnutzer läuft die Maschine die meiste Zeit umsonst.
+  # Sie fährt bei Zugriff automatisch wieder hoch (wenige Sekunden).
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 40
+    hard_limit = 80
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 3000
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+
+# Eine einzelne kleine Maschine reicht für einen Nutzer deutlich aus.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

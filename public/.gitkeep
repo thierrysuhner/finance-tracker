@@ -1,0 +1,5 @@
+Platzhalter, damit dieses Verzeichnis im Git existiert.
+
+Das Docker-Image kopiert public/ hinein. Fehlt das Verzeichnis, bricht der
+Image-Build mit "COPY failed: no source files were specified" ab — auch wenn
+die App selbst gar keine statischen Dateien braucht.
