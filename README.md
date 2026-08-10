@@ -138,13 +138,23 @@ die Datenbank bestehen bleibt**. Das schliesst zwei naheliegende Optionen aus:
 |---|---|---|
 | **GitHub Pages** | nein | Liefert nur statische Dateien aus. Login, Server Actions und Datenbank haben dort keine Laufzeit. |
 | **Vercel** | nur mit Umbau | Das Dateisystem ist schreibgeschützt, `/tmp` wird bei jedem Kaltstart geleert. Die SQLite-Datei wäre regelmässig leer. Nötig wäre eine externe Datenbank (siehe unten). |
-| **Fly.io, Railway** | ja | Echtes Volume, SQLite bleibt unverändert. Deploy per Kommando wie bei Vercel. |
-| **Eigener Server / VPS** | ja | `docker compose up -d`. Volle Datenhoheit. |
+| **Eigener Server / VPS** | ja, gratis wenn vorhanden | `docker compose up -d`. Volle Datenhoheit, keine zusätzlichen Kosten. |
+| **Oracle Cloud Always Free** | ja, dauerhaft gratis | ARM-VM mit Docker. Selbst verwaltet, Einrichtung dauert eine Stunde. |
+| **Fly.io, Railway** | ja, aber kostenpflichtig | Echtes Volume, Deploy per Kommando. Fly.io hat den Gratis-Tarif im Oktober 2024 abgeschafft. |
 
-### Fly.io (empfohlen)
+### Kosten
 
-Der bequemste Weg ohne Änderung am Code — die Konfiguration liegt in
-`fly.toml`:
+Der Gratis-Tarif von Fly.io existiert seit Oktober 2024 nicht mehr; neue Konten
+laufen nach einer kurzen Testphase rein nutzungsbasiert. Mit der Konfiguration
+in `fly.toml` — Maschine fährt bei Inaktivität herunter, 1 GB Volume — sind
+etwa **1 bis 3 Franken im Monat** zu erwarten.
+
+Dauerhaft gratis bleiben zwei Wege: ein Server, den man ohnehin hat, und die
+Always-Free-Stufe von Oracle Cloud. Letztere wurde am 15. Juni 2026 halbiert
+(auf 2 ARM-Kerne und 12 GB), reicht für diese Anwendung aber immer noch
+um ein Vielfaches.
+
+### Fly.io
 
 ```bash
 fly launch --no-deploy --copy-config

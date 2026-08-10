@@ -4,6 +4,11 @@
 # nach jedem Kaltstart leer. Fly.io hängt stattdessen ein echtes Volume ein,
 # wodurch die Anwendung unverändert bleiben kann.
 #
+# NICHT GRATIS: der dauerhafte Gratis-Tarif wurde im Oktober 2024 abgeschafft.
+# Mit den Einstellungen unten (Maschine stoppt bei Inaktivität, 1 GB Volume)
+# ist mit etwa 1 bis 3 Franken im Monat zu rechnen. Wer schon einen Server hat,
+# fährt mit docker-compose.yml günstiger und behält die Daten im eigenen Haus.
+#
 # Einrichtung (einmalig):
 #   fly launch --no-deploy --copy-config
 #   fly volumes create finanzen_daten --size 1 --region fra
