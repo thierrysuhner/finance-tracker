@@ -49,6 +49,14 @@ export interface CategorizeContext {
    */
   ownNameKeys: string[];
   ownIbans: string[];
+  /**
+   * Konten für Anlagen und langfristiges Sparen.
+   *
+   * Getrennt von den übrigen eigenen Konten, obwohl beide neutral zählen:
+   * "wie viel habe ich investiert" ist eine andere Frage als "wie viel habe
+   * ich zwischen meinen Konten hin- und hergeschoben".
+   */
+  investmentIbans: string[];
   /** Unterhalb dieser Konfidenz wird nachgefragt. Standard 0.75. */
   reviewThreshold: number;
 }
@@ -60,6 +68,7 @@ export function emptyContext(overrides: Partial<CategorizeContext> = {}): Catego
     memory: new Map(),
     ownNameKeys: [],
     ownIbans: [],
+    investmentIbans: [],
     reviewThreshold: DEFAULT_REVIEW_THRESHOLD,
     ...overrides,
   };
@@ -87,6 +96,24 @@ export function categorize(
   const brand = name ? brandKey(name) : "";
 
   // ── 1. Struktur ─────────────────────────────────────────────────────────
+  // Anlagekonto: die IBAN ist der verlässlichste Hinweis, der Zwecktext der
+  // zweite. Beides prüfen, weil nicht jede Bank die Gegen-IBAN mitliefert.
+  const zweck = `${tx.rawText ?? ""}`.toLowerCase();
+  if (
+    (tx.counterpartyIban && ctx.investmentIbans.includes(tx.counterpartyIban)) ||
+    /\binvestment/.test(zweck)
+  ) {
+    return {
+      categorySlug: "investment",
+      confidence: 1,
+      stage: "struktur",
+      treatment: "neutral",
+      reason: tx.counterpartyIban && ctx.investmentIbans.includes(tx.counterpartyIban)
+        ? "Gegenkonto ist als Anlagekonto hinterlegt"
+        : 'Zahlungszweck lautet "Investments"',
+    };
+  }
+
   // Eigene IBAN als Gegenpartei: das Geld hat den eigenen Bereich nie
   // verlassen. Weder Ausgabe noch Einnahme.
   if (tx.counterpartyIban && ctx.ownIbans.includes(tx.counterpartyIban)) {

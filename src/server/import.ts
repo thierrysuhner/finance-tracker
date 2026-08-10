@@ -1,6 +1,7 @@
-import { getSqlite, getSetting, SETTING_KEYS } from "@/db";
+import { getSqlite, getSetting, getJsonSetting, SETTING_KEYS } from "@/db";
 import { parseCamt053 } from "@/core/parsers/camt053";
 import { parseSwisscardCsv } from "@/core/parsers/swisscard";
+import { parseNeonCsv, istNeonCsv } from "@/core/parsers/neon";
 import { categorize, needsReview } from "@/core/categorize/engine";
 import { frageKi, mitKiErgaenzen, type KiAnbieter } from "@/core/categorize/ki";
 import { ladeKontext } from "./context";
@@ -22,7 +23,7 @@ import { formatRappen } from "@/core/money";
  */
 
 export interface ImportErgebnis {
-  quelle: "camt053" | "swisscard";
+  quelle: "camt053" | "swisscard" | "neon";
   dateiname: string;
   neu: number;
   bekannt: number;
@@ -34,15 +35,21 @@ export interface ImportErgebnis {
   beispiele: Array<{ datum: string; betrag: string; gegenpartei: string; kategorie: string | null }>;
 }
 
-export function erkenneFormat(dateiname: string, inhalt: string): "camt053" | "swisscard" | null {
+export function erkenneFormat(
+  dateiname: string,
+  inhalt: string,
+): "camt053" | "swisscard" | "neon" | null {
   const name = dateiname.toLowerCase();
   if (inhalt.trimStart().startsWith("<?xml") || name.endsWith(".xml")) {
     return inhalt.includes("BkToCstmrStmt") ? "camt053" : null;
   }
   if (name.endsWith(".csv")) {
+    // neon zuerst prüfen: der Auszug ist semikolongetrennt und trägt
+    // Spaltennamen, die bei Swisscard nicht vorkommen.
+    if (istNeonCsv(inhalt)) return "neon";
     const kopf = inhalt.slice(0, 500).toLowerCase();
     if (kopf.includes("transaktionsdatum") || kopf.includes("kartennummer")) return "swisscard";
-    return "swisscard"; // andere CSV-Spaltennamen fängt der Parser selbst ab
+    return "swisscard"; // andere Spaltennamen fängt der Parser selbst ab
   }
   return null;
 }
@@ -52,13 +59,27 @@ export function importiere(dateiname: string, inhalt: string): ImportErgebnis {
   if (!format) {
     throw new Error(
       `Format von "${dateiname}" nicht erkannt. Erwartet wird ein CAMT.053-XML ` +
-        `aus dem E-Banking oder ein CSV-Export von Swisscard.`,
+        `aus dem E-Banking, ein CSV-Export von Swisscard oder ein neon-Auszug.`,
     );
   }
 
-  return format === "camt053"
-    ? importiereCamt(dateiname, inhalt)
-    : importiereSwisscard(dateiname, inhalt);
+  if (format === "camt053") return importiereCamt(dateiname, inhalt);
+  if (format === "neon") return importiereNeon(dateiname, inhalt);
+  return importiereSwisscard(dateiname, inhalt);
+}
+
+function importiereNeon(dateiname: string, inhalt: string): ImportErgebnis {
+  const imp = parseNeonCsv(inhalt);
+  const res = schreibe(imp.transactions, "neon");
+  const daten = imp.transactions.map((t) => t.bookingDate).sort();
+
+  return {
+    quelle: "neon",
+    dateiname,
+    ...res,
+    zeitraum: daten.length ? { von: daten[0], bis: daten[daten.length - 1] } : undefined,
+    warnungen: [...imp.warnings, ...res.warnungen],
+  };
 }
 
 function importiereCamt(dateiname: string, inhalt: string): ImportErgebnis {
@@ -214,6 +235,124 @@ function schreibe(
 
   lauf();
   return { neu, bekannt, offen, warnungen, beispiele };
+}
+
+/**
+ * Verknüpft Aufladungen des neon-Kontos mit ihrem Gegenstück.
+ *
+ * Auf dem Hauptkonto steht die Belastung, auf dem neon-Auszug die Gutschrift —
+ * derselbe Vorgang, zweimal erfasst. Würde die Gutschrift als Einnahme
+ * gezählt, sähe jeder Reisemonat nach einem Geldsegen aus.
+ *
+ * Die Zuordnung erfolgt über Betrag und ein enges Zeitfenster, weil neon den
+ * Absender nicht immer als Namen mitliefert (manchmal steht dort der
+ * Verwendungszweck, etwa "Airbnb Prag").
+ */
+export function verknuepfeKontoAufladungen(): number {
+  const db = getSqlite();
+
+  const eingaenge = db
+    .prepare(
+      `SELECT id, booking_date, amount FROM transactions
+       WHERE source = 'neon' AND amount > 0 AND treatment = 'normal' AND reviewed = 0`,
+    )
+    .all() as Array<{ id: number; booking_date: string; amount: number }>;
+
+  if (eingaenge.length === 0) return 0;
+
+  const passendeBelastung = db.prepare(
+    `SELECT id FROM transactions
+     WHERE source = 'camt053' AND amount = ?
+       AND ABS(julianday(booking_date) - julianday(?)) <= 7
+     LIMIT 1`,
+  );
+
+  const markiere = db.prepare(
+    `UPDATE transactions
+     SET category_slug = 'eigenuebertrag', treatment = 'neutral', confidence = 1,
+         stage = 'struktur', reason = ?, updated_at = ?
+     WHERE id = ?`,
+  );
+
+  let n = 0;
+  const jetzt = new Date().toISOString();
+  db.transaction(() => {
+    for (const e of eingaenge) {
+      const treffer = passendeBelastung.get(-e.amount, e.booking_date) as
+        | { id: number }
+        | undefined;
+      if (!treffer) continue;
+      markiere.run(
+        "Aufladung vom Hauptkonto — die Belastung dort ist bereits erfasst",
+        jetzt,
+        e.id,
+      );
+      n++;
+    }
+  })();
+
+  return n;
+}
+
+/**
+ * Prüft, ob zu den Aufladungen eines verknüpften Kontos auch die dortigen
+ * Ausgaben vorliegen.
+ *
+ * Hintergrund: wird die Aufladung neutral gestellt, der zugehörige Auszug
+ * aber nie importiert, verschwinden die Ausgaben spurlos aus der Auswertung.
+ * Diese Prüfung macht genau diese Lücke sichtbar, statt sie zu verschweigen.
+ */
+export interface Deckungsluecke {
+  jahr: string;
+  aufgeladen: number;
+  erfassteAusgaben: number;
+  luecke: number;
+}
+
+export function pruefeDeckung(): Deckungsluecke[] {
+  const verknuepft = getJsonSetting<string[]>(SETTING_KEYS.linkedIbans, []).map((i) =>
+    i.replace(/\s/g, "").toUpperCase(),
+  );
+  if (verknuepft.length === 0) return [];
+
+  const db = getSqlite();
+  const platzhalter = verknuepft.map(() => "?").join(",");
+
+  // Was floss vom Hauptkonto aufs verknüpfte Konto?
+  const aufgeladen = db
+    .prepare(
+      `SELECT substr(booking_date,1,4) AS jahr, SUM(ABS(amount)) AS summe
+       FROM transactions
+       WHERE source = 'camt053' AND amount < 0
+         AND counterparty_iban IN (${platzhalter})
+       GROUP BY jahr`,
+    )
+    .all(...verknuepft) as Array<{ jahr: string; summe: number }>;
+
+  // Was wurde von dort tatsächlich ausgegeben?
+  const ausgegeben = new Map(
+    (
+      db
+        .prepare(
+          `SELECT substr(booking_date,1,4) AS jahr, SUM(ABS(amount)) AS summe
+           FROM transactions WHERE source = 'neon' AND amount < 0
+           GROUP BY jahr`,
+        )
+        .all() as Array<{ jahr: string; summe: number }>
+    ).map((r) => [r.jahr, r.summe]),
+  );
+
+  return aufgeladen
+    .map((a) => ({
+      jahr: a.jahr,
+      aufgeladen: a.summe,
+      erfassteAusgaben: ausgegeben.get(a.jahr) ?? 0,
+      luecke: a.summe - (ausgegeben.get(a.jahr) ?? 0),
+    }))
+    // Kleine Abweichungen sind normal — das Konto trägt einen Restsaldo über
+    // den Jahreswechsel. Gemeldet wird nur, was ins Gewicht fällt.
+    .filter((d) => d.luecke > 20000)
+    .sort((a, b) => b.luecke - a.luecke);
 }
 
 /**

@@ -158,6 +158,13 @@ export const RULES: Rule[] = [
   { match: /^cashback$/, category: "einkommen_sonstig", direction: "in", why: "Kartenprämie" },
   { match: /^(ruckverguetung|ruckerstattung|rueckverguetung|rueckerstattung|refund)/,
     category: "erstattung", direction: "in", treatment: "neutral", why: "Rückerstattung" },
+
+  // ── Umbuchungen zwischen eigenen Konten ─────────────────────────────────
+  // Greift, wenn die Gegen-IBAN fehlt und nur der Zweck vorliegt — auf dem
+  // neon-Auszug ist das der Normalfall.
+  { match: /^(kontouebertrag|kontoubertrag|uebertrag|ubertrag|umbuchung|eigenuebertrag|topup|top up)/,
+    category: "eigenuebertrag", treatment: "neutral", confidence: 0.9,
+    why: "Umbuchung zwischen eigenen Konten" },
 ];
 
 /**
@@ -169,19 +176,38 @@ export const RULES: Rule[] = [
  * wenn keine Regel und kein Gedächtnis passt — und mit niedriger Konfidenz.
  */
 export const ISSUER_CATEGORY_MAP: Record<string, string> = {
+  // ── neon (englische Bezeichnungen, daher kollisionsfrei) ───────────────
+  "food": "auswaerts",        // deckt bei neon überwiegend Restaurants ab
+  "groceries": "lebensmittel",
+  "shopping": "shopping",
+  "transport": "mobilitaet",
+  "travel": "reisen",
+  "leisure": "freizeit",
+  "household": "haushalt",
+  "health": "gesundheit",
+  "housing": "miete",
+  "education": "ausbildung",
+  "finances": "gebuehren",
+
+  // ── Swisscard (deutsche Bezeichnungen) ─────────────────────────────────
+  // "transport" und "shopping" stehen bereits oben — bei beiden Anbietern
+  // dieselbe Bedeutung, deshalb nur einmal aufgeführt.
   "lebensmittel": "lebensmittel",
   "gastronomie": "auswaerts",
   "restaurants": "auswaerts",
   "reisen": "reisen",
-  "transport": "mobilitaet",
-  "shopping": "shopping",
+  "auto": "mobilitaet",
   "unterhaltung": "ausgehen",
   "freizeit": "freizeit",
   "gesundheit": "gesundheit",
+  "gesundheit und schönheit": "gesundheit",
+  "gesundheit und schoenheit": "gesundheit",
   "familie & haushalt": "haushalt",
   "haushalt": "haushalt",
   "dienstleistungen": "sonstiges",
   "bildung": "ausbildung",
+  // "cash" (TWINT an Privatpersonen) bewusst nicht abgebildet: dahinter kann
+  // alles stecken, von der geteilten Rechnung bis zum geliehenen Geld.
   "versicherung": "versicherung",
   "allgemein": "sonstiges",
 };

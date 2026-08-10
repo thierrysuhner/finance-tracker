@@ -179,6 +179,8 @@ export function setJsonSetting(key: string, value: unknown): void {
 export const SETTING_KEYS = {
   ownNames: "own_names",
   ownIbans: "own_ibans",
+  investmentIbans: "investment_ibans",
+  linkedIbans: "linked_ibans",
   reviewThreshold: "review_threshold",
   passwordHash: "password_hash",
   aiProvider: "ai_provider",

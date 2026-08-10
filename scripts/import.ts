@@ -6,7 +6,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { importiere, protokolliere } from "../src/server/import";
+import { importiere, protokolliere, verknuepfeKontoAufladungen, pruefeDeckung } from "../src/server/import";
 import { getSqlite, setJsonSetting, getJsonSetting, SETTING_KEYS } from "../src/db/index";
 import { formatRappen } from "../src/core/money";
 
@@ -18,10 +18,18 @@ if (dateien.length === 0) {
 
 // Beim ersten Lauf die eigenen Konten hinterlegen, damit Überträge aufs eigene
 // Konto nicht als Ausgabe zählen. Später geschieht das in den Einstellungen.
-if (getJsonSetting<string[]>(SETTING_KEYS.ownNames, []).length === 0 && process.env.OWN_NAMES) {
-  setJsonSetting(SETTING_KEYS.ownNames, process.env.OWN_NAMES.split(";").map((s) => s.trim()));
-  console.log(`Eigene Konten hinterlegt: ${process.env.OWN_NAMES}\n`);
+function setzeAusUmgebung(variable: string, schluessel: string, label: string) {
+  const wert = process.env[variable];
+  if (!wert) return;
+  const liste = wert.split(";").map((s) => s.trim()).filter(Boolean);
+  setJsonSetting(schluessel, liste);
+  console.log(`${label}: ${liste.join(", ")}`);
 }
+
+setzeAusUmgebung("OWN_NAMES", SETTING_KEYS.ownNames, "Eigene Namen");
+setzeAusUmgebung("OWN_IBANS", SETTING_KEYS.ownIbans, "Eigene Konten");
+setzeAusUmgebung("INVESTMENT_IBANS", SETTING_KEYS.investmentIbans, "Anlagekonten");
+setzeAusUmgebung("LINKED_IBANS", SETTING_KEYS.linkedIbans, "Verknüpfte Konten");
 
 for (const datei of dateien) {
   if (!fs.existsSync(datei)) {
@@ -52,6 +60,25 @@ for (const datei of dateien) {
       console.log(`   ${b.datum}  ${b.betrag.padStart(11)}  ${b.gegenpartei.slice(0, 28).padEnd(29)} ${b.kategorie ?? "→ offen"}`),
     );
   }
+}
+
+// Nachbereitung: Aufladungen verknüpfen und Deckung prüfen.
+const verknuepft = verknuepfeKontoAufladungen();
+if (verknuepft > 0) {
+  console.log(`\n${verknuepft} Aufladungen des verknüpften Kontos erkannt und neutral gestellt.`);
+}
+
+const luecken = pruefeDeckung();
+if (luecken.length > 0) {
+  console.log("\n⚠️  DECKUNGSLÜCKE");
+  for (const l of luecken) {
+    console.log(
+      `   ${l.jahr}: ${formatRappen(l.aufgeladen)} überwiesen, aber nur ` +
+      `${formatRappen(l.erfassteAusgaben)} an Ausgaben erfasst — ` +
+      `${formatRappen(l.luecke)} fehlen.`,
+    );
+  }
+  console.log("   Fehlt für diesen Zeitraum der Auszug des verknüpften Kontos?");
 }
 
 // Gesamtübersicht

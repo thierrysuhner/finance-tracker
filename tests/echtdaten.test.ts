@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseCamt053 } from "@/core/parsers/camt053";
 import { parseSwisscardCsv } from "@/core/parsers/swisscard";
+import { parseNeonCsv, istNeonCsv } from "@/core/parsers/neon";
 import { formatRappen, sum } from "@/core/money";
 
 /**
@@ -80,8 +81,45 @@ describe.skipIf(camtFiles.length === 0)("CAMT.053 gegen echte Bankdaten", () => 
   });
 });
 
-describe.skipIf(csvFiles.length === 0)("Swisscard-CSV gegen echte Kartendaten", () => {
-  const imports = csvFiles.map((f) => parseSwisscardCsv(fs.readFileSync(f, "utf-8")));
+// Die CSV-Dateien stammen aus zwei Quellen mit völlig verschiedenen Formaten.
+// Sie werden über den Inhalt getrennt, nicht über den Dateinamen — der ändert
+// sich bei jedem Export.
+const swisscardFiles = csvFiles.filter(
+  (f) => !istNeonCsv(fs.readFileSync(f, "utf-8")),
+);
+const neonFiles = csvFiles.filter((f) => istNeonCsv(fs.readFileSync(f, "utf-8")));
+
+describe.skipIf(neonFiles.length === 0)("neon-Auszug gegen echte Kontodaten", () => {
+  const imports = neonFiles.map((f) => parseNeonCsv(fs.readFileSync(f, "utf-8")));
+
+  it("liest Buchungen mit Semikolon als Trennzeichen", () => {
+    for (const imp of imports) expect(imp.transactions.length).toBeGreaterThan(0);
+  });
+
+  it("behält die Vorzeichen bei — neon führt bereits die Sicht des Inhabers", () => {
+    const alle = imports.flatMap((i) => i.transactions);
+    expect(alle.filter((t) => t.amount < 0).length).toBeGreaterThan(0);
+    expect(alle.filter((t) => t.amount > 0).length).toBeGreaterThan(0);
+  });
+
+  it("übernimmt Fremdwährungen mit Originalbetrag", () => {
+    const fx = imports.flatMap((i) => i.transactions).filter((t) => t.fxCurrency);
+    // Das Konto wird gerade für Fremdwährungen genutzt — ohne solche Buchungen
+    // stimmt die Zuordnung der Datei nicht.
+    expect(fx.length).toBeGreaterThan(0);
+    for (const t of fx) expect(t.fxAmount).toBeDefined();
+  });
+
+  it("vergibt eindeutige Referenzen", () => {
+    for (const imp of imports) {
+      const ids = new Set(imp.transactions.map((t) => t.externalId));
+      expect(ids.size).toBe(imp.transactions.length);
+    }
+  });
+});
+
+describe.skipIf(swisscardFiles.length === 0)("Swisscard-CSV gegen echte Kartendaten", () => {
+  const imports = swisscardFiles.map((f) => parseSwisscardCsv(fs.readFileSync(f, "utf-8")));
 
   it("liest Buchungen und trennt die Ausgleichszahlungen ab", () => {
     for (const imp of imports) {

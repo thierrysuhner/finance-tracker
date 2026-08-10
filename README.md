@@ -17,9 +17,13 @@ Ausgabenstatistik nicht verzerren.
 2. **Kartenexport ziehen.** Im Swisscard-Portal den CSV-Export der
    Transaktionen. Ohne diese Datei erscheint die Monatsrechnung nur als eine
    Sammelbuchung, und rund ein Viertel der Ausgaben bleibt ohne Kategorie.
-3. **Beide Dateien unter `/import` hochladen.** Bereits bekannte Buchungen
-   werden erkannt und übersprungen — die Exporte sind kumulativ seit
-   Jahresbeginn, das ist eingeplant.
+3. **Auszug des verknüpften Kontos ziehen**, falls eines genutzt wird (neon
+   für Fremdwährungsausgaben). Ohne diesen Auszug verschwinden die dortigen
+   Ausgaben spurlos, weil die Aufladung als Umbuchung neutral gestellt wird —
+   die App meldet eine solche Lücke unter *Einstellungen*.
+4. **Alle Dateien unter `/import` hochladen.** Das Format wird am Inhalt
+   erkannt, nicht am Dateinamen. Bereits bekannte Buchungen werden erkannt und
+   übersprungen — die Exporte sind kumulativ, das ist eingeplant.
 4. **Unter `/pruefen` die offenen Fälle zuordnen.** Erfahrungsgemäss ein gutes
    Dutzend pro Monat, sortiert nach Betrag. Jede Entscheidung wird gelernt und
    nicht wieder gefragt.
@@ -44,8 +48,9 @@ Drei Fallen sind eingebaut abgefangen:
 
 | Falle | Behandlung |
 |---|---|
-| Kreditkarten-Monatsrechnung | Erscheint sowohl als Sammelbelastung im Bankauszug als auch als LSV-Zeile im Kartenexport. Beide werden als Ausgleich markiert; gezählt werden nur die einzelnen Kartenbuchungen. |
-| Übertrag aufs eigene Anlagekonto | Erkannt über hinterlegte eigene Namen und IBAN, neutral gestellt. |
+| Kreditkarten-Monatsrechnung | Erscheint sowohl als Sammelbelastung im Bankauszug als auch als LSV-Zeile im Kartenexport. Beide werden als Ausgleich markiert; gezählt werden nur die einzelnen Kartenbuchungen. Über zwei Jahre echter Daten heben sich beide Seiten auf den Rappen genau auf. |
+| Übertrag aufs Anlagekonto | Erkannt über die hinterlegte IBAN und zusätzlich über den Zahlungszweck "Investments". Wird getrennt von übrigen Umbuchungen ausgewiesen. |
+| Aufladung eines verknüpften Kontos | Neutral gestellt; gezählt werden die Ausgaben aus dessen eigenem Auszug. Fehlt der Auszug, meldet die Deckungsprüfung die Lücke. |
 | Rückzahlung eines Kollegen | Wird der ursprünglichen Ausgabe zugeordnet, statt als Einnahme zu zählen. |
 
 ### Kategorisierung in Stufen

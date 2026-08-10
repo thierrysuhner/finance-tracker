@@ -1,6 +1,6 @@
 /** Gemeinsame Domain-Typen. Bewusst framework-frei, damit testbar. */
 
-export type SourceKind = "camt053" | "swisscard" | "manual";
+export type SourceKind = "camt053" | "swisscard" | "neon" | "manual";
 
 /** Wie eine Buchung in die Auswertung eingeht. */
 export type Treatment =

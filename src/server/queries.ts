@@ -309,6 +309,12 @@ export interface WiederkehrenderPosten {
  * Modell, das nur Monatsdurchschnitte kennt, verteilt sie entweder falsch auf
  * alle Monate oder übersieht sie ganz.
  */
+/** Kleinster Betrag je Belastung, der als Dauerauftrag durchgeht — in Rappen. */
+export const MIN_DAUERAUFTRAG = 1400;
+
+/** Kleinstes Monatsäquivalent, damit ein Posten fürs Planen zählt — in Rappen. */
+export const MIN_MONATSAEQUIVALENT = 1400;
+
 export function erkenneWiederkehrend(minVorkommen = 3): WiederkehrenderPosten[] {
   const db = getSqlite();
   const zeilen = db
@@ -356,23 +362,49 @@ export function erkenneWiederkehrend(minVorkommen = 3): WiederkehrenderPosten[] 
     if (intervall < 25 || intervall > 400) continue;
 
     /*
-     * Gleicher Tag im Monat.
+     * Gleicher Tag im Monat — aber NUR bei monatlichem Rhythmus.
      *
-     * Das ist das eigentliche Unterscheidungsmerkmal. Miete und Abos werden
-     * immer am selben Stichtag belastet, ein Ladenbesuch fällt auf zufällige
-     * Tage. Ohne diese Prüfung landen Einkaufsgewohnheiten in der Fixkostenliste.
+     * Bei Monatsbeträgen ist das das entscheidende Unterscheidungsmerkmal:
+     * Miete und Abos treffen den Stichtag, ein Ladenbesuch fällt auf
+     * zufällige Tage. Ohne die Prüfung landen Einkaufsgewohnheiten in der
+     * Fixkostenliste.
+     *
+     * Bei längeren Abständen wäre die Prüfung dagegen schädlich. Eine
+     * Semestergebühr ist eine Rechnung mit Zahlungsfrist, kein Dauerauftrag —
+     * sie wird mal am 17., mal am 27. bezahlt. Dort trägt die Regelmässigkeit
+     * des Abstands die Aussage: alle 170 Tage derselbe Betrag ist kein
+     * Einkaufsverhalten.
      */
-    const tage = liste.map((z) => new Date(z.datum).getDate());
-    const mittlererTag = median(tage);
-    const amGleichenTag = tage.filter((t) => {
-      const abstand = Math.abs(t - mittlererTag);
-      // Monatsenden umlaufen: der 31. und der 1. liegen nah beieinander.
-      return Math.min(abstand, 31 - abstand) <= 4;
-    }).length;
-    if (amGleichenTag / tage.length < 0.7) continue;
+    if (intervall <= 45) {
+      const tage = liste.map((z) => new Date(z.datum).getDate());
+      const mittlererTag = median(tage);
+      const amGleichenTag = tage.filter((t) => {
+        const abstand = Math.abs(t - mittlererTag);
+        // Monatsenden umlaufen: der 31. und der 1. liegen nah beieinander.
+        return Math.min(abstand, 31 - abstand) <= 4;
+      }).length;
+      if (amGleichenTag / tage.length < 0.7) continue;
+    }
 
-    // Kleinbeträge sind als planbare Belastung ohne Aussage.
-    if (Math.abs(median(liste.map((z) => z.amount))) < 1000) continue;
+    /*
+     * Zwei Untergrenzen, beide müssen erfüllt sein.
+     *
+     * 1. Je Belastung mindestens 14 Franken. Darunter gibt es schlicht keine
+     *    Daueraufträge.
+     *
+     * 2. Aufs Monat gerechnet ebenfalls mindestens 10 Franken. Diese zweite
+     *    Hürde ist nötig, weil ein Restaurant mit festem Menüpreis, das man
+     *    alle drei Monate besucht, rechnerisch exakt wie ein Abo aussieht:
+     *    gleicher Betrag, regelmässiger Abstand. Unterscheiden lässt es sich
+     *    nur über die Frage, ob der Posten fürs Planen überhaupt zählt —
+     *    16.80 zweimal im Jahr sind keine Fixkosten.
+     */
+    const betraege = liste.map((z) => z.amount);
+    const typisch = median(betraege);
+    const hoehe = Math.abs(typisch);
+
+    if (hoehe < MIN_DAUERAUFTRAG) continue;
+    if ((hoehe * 30) / intervall < MIN_MONATSAEQUIVALENT) continue;
 
     // Die Abstände müssen einigermassen regelmässig sein, sonst ist es kein
     // Dauerauftrag, sondern nur ein häufig besuchter Laden.
@@ -381,11 +413,9 @@ export function erkenneWiederkehrend(minVorkommen = 3): WiederkehrenderPosten[] 
       abstaende.length;
     if (regelmaessig < 0.6) continue;
 
-    const betraege = liste.map((z) => z.amount);
-    const typisch = median(betraege);
     const betragStabil =
-      betraege.filter((b) => Math.abs(Math.abs(b) - Math.abs(typisch)) / Math.abs(typisch) <= 0.25)
-        .length / betraege.length;
+      betraege.filter((b) => Math.abs(Math.abs(b) - hoehe) / hoehe <= 0.25).length /
+      betraege.length;
     if (betragStabil < 0.6) continue;
 
     const zuletzt = liste[liste.length - 1].datum;

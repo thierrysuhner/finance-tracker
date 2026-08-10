@@ -1,4 +1,6 @@
 import { getJsonSetting, getSetting, getSqlite, SETTING_KEYS } from "@/db";
+import { pruefeDeckung } from "@/server/import";
+import { formatRappen } from "@/core/money";
 import { speichereEinstellungen, abmelden, speichereKi } from "@/app/actions";
 import { DEFAULT_REVIEW_THRESHOLD } from "@/core/categorize/engine";
 import { Karte, KartenTitel } from "@/components/ui";
@@ -9,6 +11,9 @@ export const dynamic = "force-dynamic";
 export default async function Einstellungen() {
   const namen = getJsonSetting<string[]>(SETTING_KEYS.ownNames, []);
   const ibans = getJsonSetting<string[]>(SETTING_KEYS.ownIbans, []);
+  const investIbans = getJsonSetting<string[]>(SETTING_KEYS.investmentIbans, []);
+  const linkedIbans = getJsonSetting<string[]>(SETTING_KEYS.linkedIbans, []);
+  const luecken = pruefeDeckung();
   const schwelle = Number(getSetting(SETTING_KEYS.reviewThreshold)) || DEFAULT_REVIEW_THRESHOLD;
 
   const gelernt = (
@@ -54,8 +59,44 @@ export default async function Einstellungen() {
             </span>
             <textarea
               name="eigeneIbans"
-              rows={2}
+              rows={3}
               defaultValue={ibans.join("\n")}
+              placeholder="CH00 0000 0000 0000 0000 0"
+              className="tabular rounded-lg border border-[var(--border)] bg-[var(--surface-0)] px-3 py-2 text-sm"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-sm">Anlagekonten</span>
+            <span className="text-xs text-[var(--text-muted)]">
+              Depot und langfristiges Sparen. Zählen ebenfalls nicht als Ausgabe,
+              werden aber getrennt ausgewiesen — "wie viel habe ich investiert" ist
+              eine andere Frage als "wie viel habe ich zwischen Konten geschoben".
+              Zusätzlich gilt: steht im Zahlungszweck "Investments", wird das auch
+              ohne IBAN erkannt.
+            </span>
+            <textarea
+              name="anlageIbans"
+              rows={2}
+              defaultValue={investIbans.join("\n")}
+              placeholder="CH00 0000 0000 0000 0000 0"
+              className="tabular rounded-lg border border-[var(--border)] bg-[var(--surface-0)] px-3 py-2 text-sm"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-sm">Verknüpfte Konten mit eigenem Auszug</span>
+            <span className="text-xs text-[var(--text-muted)]">
+              Konten, die du vom Hauptkonto aus auflädst und für die du einen
+              separaten Auszug importierst — etwa ein Konto für
+              Fremdwährungsausgaben. Die Aufladung wird ausgeblendet, gezählt
+              werden die Ausgaben aus dem eigenen Auszug. Fehlt dieser Auszug für
+              einen Zeitraum, wird das unten gemeldet.
+            </span>
+            <textarea
+              name="verknuepfteIbans"
+              rows={2}
+              defaultValue={linkedIbans.join("\n")}
               placeholder="CH00 0000 0000 0000 0000 0"
               className="tabular rounded-lg border border-[var(--border)] bg-[var(--surface-0)] px-3 py-2 text-sm"
             />
@@ -86,6 +127,27 @@ export default async function Einstellungen() {
           </button>
         </form>
       </Karte>
+
+      {luecken.length > 0 && (
+        <Karte>
+          <KartenTitel hinweis="fehlende Auszüge">Deckungslücke</KartenTitel>
+          <p className="mb-3 text-sm text-[var(--text-secondary)]">
+            Für diese Zeiträume wurde Geld auf ein verknüpftes Konto überwiesen, ohne
+            dass der zugehörige Auszug vorliegt. Diese Ausgaben fehlen deshalb
+            vollständig in der Auswertung.
+          </p>
+          <ul className="flex flex-col gap-2">
+            {luecken.map((l) => (
+              <li key={l.jahr} className="flex items-baseline justify-between gap-3 text-sm">
+                <span>{l.jahr}</span>
+                <span className="tabular" style={{ color: "var(--n-freiwillig)" }}>
+                  {formatRappen(l.luecke)} CHF ohne Gegenbuchung
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Karte>
+      )}
 
       <Karte>
         <KartenTitel>Gelernte Zuordnungen</KartenTitel>

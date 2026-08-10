@@ -43,12 +43,16 @@ export function ladeKontext(): CategorizeContext {
 
   const ownNames = getJsonSetting<string[]>(SETTING_KEYS.ownNames, []);
   const ownIbans = getJsonSetting<string[]>(SETTING_KEYS.ownIbans, []);
+  const investmentIbans = getJsonSetting<string[]>(SETTING_KEYS.investmentIbans, []);
   const threshold = Number(getSetting(SETTING_KEYS.reviewThreshold));
+
+  const normIban = (i: string) => i.replace(/\s/g, "").toUpperCase();
 
   return {
     memory,
     ownNameKeys: ownNames.map(merchantKey).filter(Boolean),
-    ownIbans: ownIbans.map((i) => i.replace(/\s/g, "").toUpperCase()),
+    ownIbans: ownIbans.map(normIban),
+    investmentIbans: investmentIbans.map(normIban),
     reviewThreshold: Number.isFinite(threshold) && threshold > 0
       ? threshold
       : DEFAULT_REVIEW_THRESHOLD,

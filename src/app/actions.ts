@@ -277,12 +277,23 @@ export async function budgetsAusHistorie() {
 export async function speichereEinstellungen(formular: FormData) {
   const namen = String(formular.get("eigeneNamen") ?? "")
     .split("\n").map((s) => s.trim()).filter(Boolean);
-  const ibans = String(formular.get("eigeneIbans") ?? "")
-    .split("\n").map((s) => s.replace(/\s/g, "").toUpperCase()).filter(Boolean);
+  const ibanListe = (feld: string) =>
+    String(formular.get(feld) ?? "")
+      .split("\n")
+      .map((s) => s.replace(/\s/g, "").toUpperCase())
+      .filter(Boolean);
+
+  const ibans = ibanListe("eigeneIbans");
+  const anlage = ibanListe("anlageIbans");
+  const verknuepft = ibanListe("verknuepfteIbans");
   const schwelle = Number(formular.get("schwelle"));
 
   setJsonSetting(SETTING_KEYS.ownNames, namen);
-  setJsonSetting(SETTING_KEYS.ownIbans, ibans);
+  // Verknüpfte Konten gehören zusätzlich zu den eigenen: die Aufladung soll
+  // in jedem Fall neutral sein, auch wenn der zugehörige Auszug fehlt.
+  setJsonSetting(SETTING_KEYS.ownIbans, [...new Set([...ibans, ...verknuepft])]);
+  setJsonSetting(SETTING_KEYS.investmentIbans, anlage);
+  setJsonSetting(SETTING_KEYS.linkedIbans, verknuepft);
   if (Number.isFinite(schwelle) && schwelle > 0 && schwelle <= 1) {
     setSetting(SETTING_KEYS.reviewThreshold, String(schwelle));
   }
