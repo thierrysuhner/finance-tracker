@@ -3,12 +3,33 @@
 import { useActionState } from "react";
 import { anmelden } from "@/app/actions";
 
-export function AnmeldeFormular({ weiter, neu }: { weiter: string; neu: boolean }) {
+export function AnmeldeFormular({
+  weiter, neu, brauchtToken = false,
+}: { weiter: string; neu: boolean; brauchtToken?: boolean }) {
   const [zustand, aktion, laeuft] = useActionState(anmelden, null as { fehler?: string } | null);
 
   return (
     <form action={aktion} className="flex flex-col gap-3">
       <input type="hidden" name="weiter" value={weiter} />
+      {brauchtToken && (
+        <label className="flex flex-col gap-1.5">
+          <span className="text-sm text-[var(--text-secondary)]">
+            Einrichtungs-Kennwort
+          </span>
+          <span className="text-xs text-[var(--text-muted)]">
+            Der Wert aus der Umgebungsvariable SETUP_TOKEN. Wird nur dieses eine
+            Mal gebraucht und kann danach entfernt werden.
+          </span>
+          <input
+            type="password"
+            name="setupToken"
+            required
+            autoComplete="off"
+            className="rounded-lg border border-[var(--border)] bg-[var(--surface-0)] px-3 py-2.5"
+          />
+        </label>
+      )}
+
       <label className="flex flex-col gap-1.5">
         <span className="text-sm text-[var(--text-secondary)]">Passwort</span>
         <input

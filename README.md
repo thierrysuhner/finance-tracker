@@ -162,10 +162,19 @@ turso db tokens create finanzen       # -> Zugriffstoken
 #    TURSO_DATABASE_URL   libsql://…
 #    TURSO_AUTH_TOKEN     …
 #    SESSION_SECRET       openssl rand -base64 48
+#    SETUP_TOKEN          openssl rand -base64 24   (nur einmal gebraucht)
 
 # 3. Repository verbinden und deployen
 vercel --prod
 ```
+
+**SESSION_SECRET ist Pflicht.** Fehlt es, schlägt jede Anmeldung fehl.
+
+**SETUP_TOKEN schützt die Ersteinrichtung.** Solange kein Passwort gesetzt ist,
+könnte sonst jeder Aufrufer eines festlegen — und Vercel-Hostnamen tauchen
+binnen Minuten in den öffentlichen Zertifikatsprotokollen auf. Beim ersten
+Aufruf verlangt die Anmeldemaske deshalb zusätzlich dieses Kennwort. Danach
+kann die Variable wieder gelöscht werden.
 
 **Bestehende Daten übernehmen.** Die Ersteinrichtung geht lokal deutlich
 schneller — Dateien importieren, Zuordnungen treffen, alles ohne Netz. Der
