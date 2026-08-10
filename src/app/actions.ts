@@ -8,7 +8,7 @@ import { importiere, protokolliere, ergaenzeMitKi } from "@/server/import";
 import { setzeBudget, uebernehmeVorschlaege } from "@/server/budget";
 import {
   passwortStimmt, setzePasswort, erstelleSitzung, setzeSitzungsCookie,
-  loescheSitzung, istEingerichtet,
+  loescheSitzung, istEingerichtet, pruefeEinrichtungsToken,
 } from "@/lib/auth";
 import { parseAmountToRappen } from "@/core/money";
 import { CATEGORY_BY_SLUG } from "@/core/categorize/categories";
@@ -22,7 +22,12 @@ export async function anmelden(_prev: unknown, formular: FormData) {
   const weiter = String(formular.get("weiter") ?? "/");
 
   if (!(await istEingerichtet())) {
-    // Erster Start: das eingegebene Passwort wird gesetzt.
+    // Erster Start: das eingegebene Passwort wird gesetzt. Im Produktivbetrieb
+    // erst nach Vorlage des Einmalkennworts — sonst könnte ein Fremder dem
+    // frisch veröffentlichten Dienst zuvorkommen.
+    const token = pruefeEinrichtungsToken(String(formular.get("setupToken") ?? ""));
+    if (!token.ok) return { fehler: token.fehler };
+
     if (passwort.length < 10) {
       return { fehler: "Bitte mindestens 10 Zeichen wählen." };
     }

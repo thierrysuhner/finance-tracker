@@ -60,6 +60,46 @@ export async function istEingerichtet(): Promise<boolean> {
   return (await getSetting(SETTING_KEYS.passwordHash)) !== null;
 }
 
+/**
+ * Darf jetzt ein erstes Passwort gesetzt werden?
+ *
+ * Solange keines existiert, kann jeder Aufrufer eines festlegen und hätte
+ * damit Zugriff auf sämtliche Kontodaten. Lokal ist das unkritisch. Bei einer
+ * öffentlich erreichbaren Adresse nicht: Hostnamen tauchen binnen Minuten in
+ * den öffentlichen Zertifikatsprotokollen auf und werden automatisiert
+ * abgeklappert.
+ *
+ * Deshalb verlangt die Ersteinrichtung im Produktivbetrieb ein Einmalkennwort
+ * aus der Umgebung. Nach dem Setzen des Passworts kann SETUP_TOKEN wieder
+ * entfernt werden — es wird nur für diesen einen Vorgang gebraucht.
+ */
+export function pruefeEinrichtungsToken(eingabe: string): { ok: true } | { ok: false; fehler: string } {
+  if (process.env.NODE_ENV !== "production") return { ok: true };
+
+  const erwartet = process.env.SETUP_TOKEN?.trim();
+  if (!erwartet) {
+    return {
+      ok: false,
+      fehler:
+        "Für die Ersteinrichtung fehlt SETUP_TOKEN in den Umgebungsvariablen. " +
+        "Ohne diesen Schutz könnte ein Fremder das Passwort setzen, bevor du es tust.",
+    };
+  }
+
+  const a = Buffer.from(erwartet);
+  const b = Buffer.from(eingabe.trim());
+  // Zeitkonstanter Vergleich, gleiche Länge erzwingen.
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return { ok: false, fehler: "Einrichtungs-Kennwort stimmt nicht." };
+  }
+  return { ok: true };
+}
+
+/** Ist der Schutz für die Ersteinrichtung überhaupt aktiv? */
+export function einrichtungBrauchtToken(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
 export async function setzePasswort(passwort: string): Promise<void> {
   if (passwort.length < 10) {
     throw new Error("Das Passwort muss mindestens 10 Zeichen haben.");

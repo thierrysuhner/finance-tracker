@@ -1,4 +1,4 @@
-import { istEingerichtet } from "@/lib/auth";
+import { istEingerichtet, einrichtungBrauchtToken } from "@/lib/auth";
 import { AnmeldeFormular } from "./Formular";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,11 @@ export default async function Login({
             ? "Deine Finanzübersicht ist passwortgeschützt."
             : "Erster Start. Wähle ein Passwort — es gibt keinen Weg, es zurückzusetzen, ausser die Datenbankdatei zu bearbeiten."}
         </p>
-        <AnmeldeFormular weiter={weiter ?? "/"} neu={!eingerichtet} />
+        <AnmeldeFormular
+          weiter={weiter ?? "/"}
+          neu={!eingerichtet}
+          brauchtToken={!eingerichtet && einrichtungBrauchtToken()}
+        />
       </div>
     </div>
   );
