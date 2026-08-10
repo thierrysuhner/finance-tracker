@@ -1,56 +1,130 @@
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import fs from "node:fs";
-import path from "node:path";
-import * as schema from "./schema";
+import { createClient, type Client, type InArgs } from "@libsql/client";
 
 /**
- * Datenbankzugriff.
+ * Datenbankzugriff über libSQL.
  *
- * Die Datei liegt unter data/ und ist per .gitignore ausgeschlossen. Der Pfad
- * lässt sich über DATABASE_PATH umstellen — im Container zeigt er auf ein
- * Volume, damit die Daten einen Neustart des Containers überleben.
+ * EIN TREIBER FÜR ALLE UMGEBUNGEN. libSQL ist ein SQLite-Abkömmling und
+ * versteht sowohl lokale Dateien als auch eine entfernte Datenbank bei Turso.
+ * Dadurch bleibt jede SQL-Anweisung wörtlich gleich — auch die
+ * SQLite-Eigenheiten julianday(), MIN(0, x) und ON CONFLICT, die bei
+ * PostgreSQL alle hätten umgeschrieben werden müssen.
+ *
+ * Der Preis dafür: alle Zugriffe sind asynchron. Ein Netzwerktreiber kann
+ * nicht anders. Genau deshalb wurde vor dieser Umstellung eine Testsuite für
+ * die Abfragen geschrieben.
+ *
+ * Auswahl der Verbindung:
+ *   TURSO_DATABASE_URL gesetzt  ->  entfernte Datenbank (Vercel)
+ *   sonst DATABASE_PATH         ->  lokale Datei (Docker, eigener Server)
+ *   sonst                       ->  ./data/finance.db (Entwicklung)
  */
 
-const DB_PATH = process.env.DATABASE_PATH
-  ? path.resolve(process.env.DATABASE_PATH)
-  : path.resolve(process.cwd(), "data/finance.db");
+export type Args = InArgs;
 
-let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
-let _sqlite: Database.Database | null = null;
-
-export function getSqlite(): Database.Database {
-  if (_sqlite) return _sqlite;
-
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const sqlite = new Database(DB_PATH);
-
-  // WAL erlaubt Lesen während geschrieben wird — beim Import spürbar.
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
-  // Ohne diese Einstellung riskiert man bei einem Stromausfall mitten im
-  // Import einen inkonsistenten Stand.
-  sqlite.pragma("synchronous = NORMAL");
-
-  migrate(sqlite);
-  _sqlite = sqlite;
-  return sqlite;
+/** Was innerhalb wie ausserhalb einer Transaktion verfügbar ist. */
+export interface SqlRunner {
+  all<T = Record<string, any>>(sql: string, args?: Args): Promise<T[]>;
+  get<T = Record<string, any>>(sql: string, args?: Args): Promise<T | undefined>;
+  run(sql: string, args?: Args): Promise<{ changes: number }>;
 }
 
-export function getDb() {
-  if (!_db) _db = drizzle(getSqlite(), { schema });
-  return _db;
+export interface Datenbank extends SqlRunner {
+  /**
+   * Führt mehrere Schreibvorgänge gemeinsam aus. Bricht etwas ab, bleibt
+   * nichts halb Geschriebenes zurück — beim Monatsimport der springende Punkt.
+   */
+  tx<T>(fn: (t: SqlRunner) => Promise<T>): Promise<T>;
+}
+
+function verbindung(): { url: string; authToken?: string } {
+  const turso = process.env.TURSO_DATABASE_URL?.trim();
+  if (turso) {
+    return { url: turso, authToken: process.env.TURSO_AUTH_TOKEN?.trim() };
+  }
+  const pfad = process.env.DATABASE_PATH?.trim() || "./data/finance.db";
+  // file:-URLs von libSQL wollen einen Pfad ohne Schema-Doppelung.
+  return { url: pfad.startsWith("file:") ? pfad : `file:${pfad}` };
+}
+
+let _client: Client | null = null;
+let _bereit: Promise<void> | null = null;
+
+function client(): Client {
+  if (!_client) _client = createClient(verbindung());
+  return _client;
+}
+
+/** Wandelt eine libSQL-Zeile in ein schlichtes Objekt. */
+function alsObjekt<T>(row: unknown): T {
+  return { ...(row as Record<string, unknown>) } as T;
+}
+
+function runnerFuer(ausfuehren: (sql: string, args?: Args) => Promise<any>): SqlRunner {
+  return {
+    async all<T>(sql: string, args?: Args): Promise<T[]> {
+      const r = await ausfuehren(sql, args);
+      return r.rows.map((row: unknown) => alsObjekt<T>(row));
+    },
+    async get<T>(sql: string, args?: Args): Promise<T | undefined> {
+      const r = await ausfuehren(sql, args);
+      return r.rows.length ? alsObjekt<T>(r.rows[0]) : undefined;
+    },
+    async run(sql: string, args?: Args): Promise<{ changes: number }> {
+      const r = await ausfuehren(sql, args);
+      return { changes: Number(r.rowsAffected ?? 0) };
+    },
+  };
+}
+
+export async function getDb(): Promise<Datenbank> {
+  const c = client();
+  if (!_bereit) _bereit = migriere(c);
+  await _bereit;
+
+  const basis = runnerFuer((sql, args) =>
+    args === undefined ? c.execute(sql) : c.execute({ sql, args }),
+  );
+
+  return {
+    ...basis,
+    async tx<T>(fn: (t: SqlRunner) => Promise<T>): Promise<T> {
+      const t = await c.transaction("write");
+      try {
+        const ergebnis = await fn(
+          runnerFuer((sql, args) =>
+            args === undefined ? t.execute(sql) : t.execute({ sql, args }),
+          ),
+        );
+        await t.commit();
+        return ergebnis;
+      } catch (fehler) {
+        await t.rollback();
+        throw fehler;
+      }
+    },
+  };
 }
 
 /**
- * Schema anlegen und fortschreiben.
+ * Schema anlegen.
  *
- * Bewusst als handgeschriebenes SQL statt Migrations-Werkzeug: bei einer
- * einzelnen Datei ohne Mitbenutzer ist ein Migrationsordner mit Zeitstempeln
- * mehr Verwaltung als Nutzen. Jede Anweisung ist idempotent.
+ * Bewusst handgeschriebenes SQL statt eines Migrationswerkzeugs: bei einer
+ * Datenbank ohne Mitbenutzer ist ein Ordner voller Zeitstempel-Dateien mehr
+ * Verwaltung als Nutzen. Jede Anweisung ist wiederholbar.
+ *
+ * Erst wird geprüft, ob das Schema schon steht. Auf Vercel läuft dieser Code
+ * bei jedem Kaltstart, und eine einzelne Abfrage ist billiger als ein Dutzend
+ * CREATE-Anweisungen über das Netz.
  */
-function migrate(db: Database.Database) {
-  db.exec(`
+async function migriere(c: Client): Promise<void> {
+  try {
+    await c.execute("SELECT 1 FROM settings LIMIT 1");
+    return;
+  } catch {
+    // Schema fehlt — unten anlegen.
+  }
+
+  await c.executeMultiple(`
     CREATE TABLE IF NOT EXISTS transactions (
       id                 INTEGER PRIMARY KEY AUTOINCREMENT,
       external_id        TEXT NOT NULL,
@@ -144,26 +218,34 @@ function migrate(db: Database.Database) {
   `);
 }
 
+/** Nur für Tests: Verbindung zurücksetzen, damit eine neue Datei greift. */
+export function _reset(): void {
+  _client = null;
+  _bereit = null;
+}
+
 // ── Einstellungen ──────────────────────────────────────────────────────────
 
-export function getSetting(key: string): string | null {
-  const row = getSqlite()
-    .prepare("SELECT value FROM settings WHERE key = ?")
-    .get(key) as { value: string } | undefined;
+export async function getSetting(key: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.get<{ value: string }>(
+    "SELECT value FROM settings WHERE key = ?",
+    [key],
+  );
   return row?.value ?? null;
 }
 
-export function setSetting(key: string, value: string): void {
-  getSqlite()
-    .prepare(
-      "INSERT INTO settings (key, value) VALUES (?, ?) " +
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .run(key, value);
+export async function setSetting(key: string, value: string): Promise<void> {
+  const db = await getDb();
+  await db.run(
+    "INSERT INTO settings (key, value) VALUES (?, ?) " +
+      "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    [key, value],
+  );
 }
 
-export function getJsonSetting<T>(key: string, fallback: T): T {
-  const raw = getSetting(key);
+export async function getJsonSetting<T>(key: string, fallback: T): Promise<T> {
+  const raw = await getSetting(key);
   if (!raw) return fallback;
   try {
     return JSON.parse(raw) as T;
@@ -172,8 +254,8 @@ export function getJsonSetting<T>(key: string, fallback: T): T {
   }
 }
 
-export function setJsonSetting(key: string, value: unknown): void {
-  setSetting(key, JSON.stringify(value));
+export async function setJsonSetting(key: string, value: unknown): Promise<void> {
+  await setSetting(key, JSON.stringify(value));
 }
 
 export const SETTING_KEYS = {
@@ -187,5 +269,3 @@ export const SETTING_KEYS = {
   aiApiKey: "ai_api_key",
   setupDone: "setup_done",
 } as const;
-
-export { schema };

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getSqlite, setJsonSetting, setSetting, SETTING_KEYS } from "@/db";
+import { getDb, setJsonSetting, setSetting, SETTING_KEYS } from "@/db";
 import { merkeZuordnung } from "@/server/context";
 import { importiere, protokolliere, ergaenzeMitKi } from "@/server/import";
 import { setzeBudget, uebernehmeVorschlaege } from "@/server/budget";
@@ -21,13 +21,13 @@ export async function anmelden(_prev: unknown, formular: FormData) {
   const passwort = String(formular.get("passwort") ?? "");
   const weiter = String(formular.get("weiter") ?? "/");
 
-  if (!istEingerichtet()) {
+  if (!(await istEingerichtet())) {
     // Erster Start: das eingegebene Passwort wird gesetzt.
     if (passwort.length < 10) {
       return { fehler: "Bitte mindestens 10 Zeichen wählen." };
     }
-    setzePasswort(passwort);
-  } else if (!passwortStimmt(passwort)) {
+    await setzePasswort(passwort);
+  } else if (!(await passwortStimmt(passwort))) {
     return { fehler: "Passwort stimmt nicht." };
   }
 
@@ -58,44 +58,48 @@ export async function ordneZu(formular: FormData) {
 
   if (!id || !CATEGORY_BY_SLUG.has(kategorie)) return;
 
-  const db = getSqlite();
-  const zeile = db
-    .prepare("SELECT counterparty, amount FROM transactions WHERE id = ?")
-    .get(id) as { counterparty: string | null; amount: number } | undefined;
+  const db = await getDb();
+  const zeile = await db.get<{ counterparty: string | null; amount: number }>(
+    "SELECT counterparty, amount FROM transactions WHERE id = ?",
+    [id],
+  );
   if (!zeile) return;
 
   const def = CATEGORY_BY_SLUG.get(kategorie)!;
   const treatment = def.group === "neutral" ? "neutral" : "normal";
+  const jetzt = new Date().toISOString();
 
-  db.prepare(
+  await db.run(
     `UPDATE transactions
      SET category_slug = ?, treatment = ?, necessity_override = ?,
          confidence = 1, stage = 'gedaechtnis', reviewed = 1,
          reason = 'Von dir zugeordnet', updated_at = ?
      WHERE id = ?`,
-  ).run(
-    kategorie,
-    treatment,
-    notwendigkeit && notwendigkeit !== def.necessity ? notwendigkeit : null,
-    new Date().toISOString(),
-    id,
+    [
+      kategorie,
+      treatment,
+      notwendigkeit && notwendigkeit !== def.necessity ? notwendigkeit : null,
+      jetzt,
+      id,
+    ],
   );
 
   if (merken && zeile.counterparty) {
-    merkeZuordnung(zeile.counterparty, kategorie, {
+    await merkeZuordnung(zeile.counterparty, kategorie, {
       treatment: treatment === "neutral" ? "neutral" : undefined,
       auchMarke,
     });
 
     // Gleich alle offenen Buchungen desselben Händlers mitnehmen — sonst
     // müsste dieselbe Entscheidung für jeden Besuch wiederholt werden.
-    db.prepare(
+    await db.run(
       `UPDATE transactions
        SET category_slug = ?, treatment = ?, confidence = 0.95,
            stage = 'gedaechtnis', reason = 'Aus deiner Zuordnung übernommen',
            updated_at = ?
        WHERE counterparty = ? AND reviewed = 0 AND id != ?`,
-    ).run(kategorie, treatment, new Date().toISOString(), zeile.counterparty, id);
+      [kategorie, treatment, jetzt, zeile.counterparty, id],
+    );
   }
 
   revalidatePath("/pruefen");
@@ -108,15 +112,15 @@ export async function verrechne(formular: FormData) {
   const ausgabeId = Number(formular.get("ausgabeId"));
   if (!eingangId || !ausgabeId) return;
 
-  getSqlite()
-    .prepare(
-      `UPDATE transactions
-       SET offset_of = ?, treatment = 'neutral', category_slug = 'erstattung',
-           reviewed = 1, confidence = 1, reason = 'Mit einer Ausgabe verrechnet',
-           updated_at = ?
-       WHERE id = ?`,
-    )
-    .run(ausgabeId, new Date().toISOString(), eingangId);
+  const db = await getDb();
+  await db.run(
+    `UPDATE transactions
+     SET offset_of = ?, treatment = 'neutral', category_slug = 'erstattung',
+         reviewed = 1, confidence = 1, reason = 'Mit einer Ausgabe verrechnet',
+         updated_at = ?
+     WHERE id = ?`,
+    [ausgabeId, new Date().toISOString(), eingangId],
+  );
 
   revalidatePath("/pruefen");
   revalidatePath("/");
@@ -125,12 +129,12 @@ export async function verrechne(formular: FormData) {
 export async function hebeVerrechnungAuf(formular: FormData) {
   const id = Number(formular.get("id"));
   if (!id) return;
-  getSqlite()
-    .prepare(
-      `UPDATE transactions SET offset_of = NULL, treatment = 'normal',
-       reviewed = 0, updated_at = ? WHERE id = ?`,
-    )
-    .run(new Date().toISOString(), id);
+  const db = await getDb();
+  await db.run(
+    `UPDATE transactions SET offset_of = NULL, treatment = 'normal',
+     reviewed = 0, updated_at = ? WHERE id = ?`,
+    [new Date().toISOString(), id],
+  );
   revalidatePath("/pruefen");
 }
 
@@ -138,11 +142,11 @@ export async function hebeVerrechnungAuf(formular: FormData) {
 export async function bestaetige(formular: FormData) {
   const id = Number(formular.get("id"));
   if (!id) return;
-  getSqlite()
-    .prepare(
-      `UPDATE transactions SET reviewed = 1, confidence = 1, updated_at = ? WHERE id = ?`,
-    )
-    .run(new Date().toISOString(), id);
+  const db = await getDb();
+  await db.run(
+    `UPDATE transactions SET reviewed = 1, confidence = 1, updated_at = ? WHERE id = ?`,
+    [new Date().toISOString(), id],
+  );
   revalidatePath("/pruefen");
   revalidatePath("/");
 }
@@ -177,16 +181,15 @@ export async function erfasseManuell(formular: FormData) {
   const istEinnahme = def.group === "einkommen";
   const jetzt = new Date().toISOString();
 
-  getSqlite()
-    .prepare(
-      `INSERT INTO transactions (
-         external_id, source, account_ref, booking_date, amount, currency,
-         raw_text, counterparty, category_slug, treatment, confidence, stage,
-         reason, reviewed, created_at, updated_at
-       ) VALUES (?, 'manual', ?, ?, ?, 'CHF', ?, ?, ?, ?, 1, 'gedaechtnis',
-         'Von dir erfasst', 1, ?, ?)`,
-    )
-    .run(
+  const db = await getDb();
+  await db.run(
+    `INSERT INTO transactions (
+       external_id, source, account_ref, booking_date, amount, currency,
+       raw_text, counterparty, category_slug, treatment, confidence, stage,
+       reason, reviewed, created_at, updated_at
+     ) VALUES (?, 'manual', ?, ?, ?, 'CHF', ?, ?, ?, ?, 1, 'gedaechtnis',
+       'Von dir erfasst', 1, ?, ?)`,
+    [
       `manual_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       konto,
       datum,
@@ -197,7 +200,8 @@ export async function erfasseManuell(formular: FormData) {
       def.group === "neutral" ? "neutral" : "normal",
       jetzt,
       jetzt,
-    );
+    ],
+  );
 
   revalidatePath("/buchungen");
   revalidatePath("/");
@@ -209,7 +213,8 @@ export async function loescheBuchung(formular: FormData) {
   if (!id) return;
   // Nur selbst erfasste Buchungen dürfen weg — importierte kämen beim
   // nächsten Import ohnehin wieder und würden dann als neu gelten.
-  getSqlite().prepare("DELETE FROM transactions WHERE id = ? AND source = 'manual'").run(id);
+  const db = await getDb();
+  await db.run("DELETE FROM transactions WHERE id = ? AND source = 'manual'", [id]);
   revalidatePath("/buchungen");
   revalidatePath("/");
 }
@@ -225,8 +230,8 @@ export async function importiereDatei(_prev: unknown, formular: FormData) {
     if (datei.size === 0) continue;
     try {
       const inhalt = await datei.text();
-      const e = importiere(datei.name, inhalt);
-      protokolliere(e);
+      const e = await importiere(datei.name, inhalt);
+      await protokolliere(e);
       berichte.push(e);
     } catch (f) {
       return { fehler: f instanceof Error ? f.message : "Import fehlgeschlagen." };
@@ -254,10 +259,10 @@ export async function speichereBudget(formular: FormData) {
   if (!CATEGORY_BY_SLUG.has(slug)) return;
 
   if (!wert) {
-    setzeBudget(slug, null);
+    await setzeBudget(slug, null);
   } else {
     try {
-      setzeBudget(slug, Math.abs(parseAmountToRappen(wert)));
+      await setzeBudget(slug, Math.abs(parseAmountToRappen(wert)));
     } catch {
       return;
     }
@@ -267,7 +272,7 @@ export async function speichereBudget(formular: FormData) {
 }
 
 export async function budgetsAusHistorie() {
-  uebernehmeVorschlaege();
+  await uebernehmeVorschlaege();
   revalidatePath("/budget");
   revalidatePath("/");
 }
@@ -288,14 +293,14 @@ export async function speichereEinstellungen(formular: FormData) {
   const verknuepft = ibanListe("verknuepfteIbans");
   const schwelle = Number(formular.get("schwelle"));
 
-  setJsonSetting(SETTING_KEYS.ownNames, namen);
+  await setJsonSetting(SETTING_KEYS.ownNames, namen);
   // Verknüpfte Konten gehören zusätzlich zu den eigenen: die Aufladung soll
   // in jedem Fall neutral sein, auch wenn der zugehörige Auszug fehlt.
-  setJsonSetting(SETTING_KEYS.ownIbans, [...new Set([...ibans, ...verknuepft])]);
-  setJsonSetting(SETTING_KEYS.investmentIbans, anlage);
-  setJsonSetting(SETTING_KEYS.linkedIbans, verknuepft);
+  await setJsonSetting(SETTING_KEYS.ownIbans, [...new Set([...ibans, ...verknuepft])]);
+  await setJsonSetting(SETTING_KEYS.investmentIbans, anlage);
+  await setJsonSetting(SETTING_KEYS.linkedIbans, verknuepft);
   if (Number.isFinite(schwelle) && schwelle > 0 && schwelle <= 1) {
-    setSetting(SETTING_KEYS.reviewThreshold, String(schwelle));
+    await setSetting(SETTING_KEYS.reviewThreshold, String(schwelle));
   }
 
   revalidatePath("/einstellungen");
@@ -308,14 +313,14 @@ export async function speichereKi(formular: FormData) {
 
   if (!anbieter) {
     // Anbieter auf "Aus" heisst abschalten — dann läuft alles rein lokal.
-    setSetting(SETTING_KEYS.aiProvider, "");
-    setSetting(SETTING_KEYS.aiApiKey, "");
+    await setSetting(SETTING_KEYS.aiProvider, "");
+    await setSetting(SETTING_KEYS.aiApiKey, "");
   } else {
-    setSetting(SETTING_KEYS.aiProvider, anbieter);
+    await setSetting(SETTING_KEYS.aiProvider, anbieter);
     // Leeres Schlüsselfeld bei gewähltem Anbieter heisst "unverändert lassen".
     // Der Schlüssel wird nie ins Formular zurückgegeben, deshalb wäre ein
     // Speichern ohne erneute Eingabe sonst ein versehentliches Löschen.
-    if (schluessel) setSetting(SETTING_KEYS.aiApiKey, schluessel);
+    if (schluessel) await setSetting(SETTING_KEYS.aiApiKey, schluessel);
   }
   revalidatePath("/einstellungen");
 }
@@ -323,9 +328,9 @@ export async function speichereKi(formular: FormData) {
 export async function aenderePasswort(_prev: unknown, formular: FormData) {
   const alt = String(formular.get("alt") ?? "");
   const neu = String(formular.get("neu") ?? "");
-  if (!passwortStimmt(alt)) return { fehler: "Das bisherige Passwort stimmt nicht." };
+  if (!(await passwortStimmt(alt))) return { fehler: "Das bisherige Passwort stimmt nicht." };
   try {
-    setzePasswort(neu);
+    await setzePasswort(neu);
   } catch (f) {
     return { fehler: f instanceof Error ? f.message : "Fehlgeschlagen." };
   }

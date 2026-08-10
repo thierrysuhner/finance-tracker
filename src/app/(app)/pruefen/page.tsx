@@ -21,20 +21,38 @@ export const dynamic = "force-dynamic";
  * wirksamsten anfangen.
  */
 export default async function Pruefen() {
-  const offen = offeneBuchungen(150);
-  const eingaenge = offeneEingaenge();
+  const offen = await offeneBuchungen(150);
+  const eingaenge = await offeneEingaenge();
 
   // Zu jedem Geldeingang die plausiblen Gegenstücke suchen.
-  const verrechnungen = eingaenge
-    .map((e) => {
-      const kandidaten = findeOffsetKandidaten(
-        { id: e.id, bookingDate: e.bookingDate, amount: e.amount, counterparty: e.counterparty },
-        ausgabenUm(e.bookingDate, 120),
-      );
-      return { eingang: e, kandidaten };
-    })
-    .filter((v) => v.kandidaten.length > 0)
-    .sort((a, b) => b.eingang.amount - a.eingang.amount);
+  // Zu jedem Eingang die Kandidaten holen. Bewusst sequenziell mit einem
+  // gemeinsamen Zwischenspeicher je Datum: sonst würde für jeden der bis zu
+  // hundert Eingänge dieselbe Abfrage erneut über das Netz gehen.
+  const kandidatenCache = new Map<string, Awaited<ReturnType<typeof ausgabenUm>>>();
+  async function ausgabenFuer(datum: string) {
+    let liste = kandidatenCache.get(datum);
+    if (!liste) {
+      liste = await ausgabenUm(datum, 120);
+      kandidatenCache.set(datum, liste);
+    }
+    return liste;
+  }
+
+  const verrechnungen: Array<{
+    eingang: (typeof eingaenge)[number];
+    kandidaten: ReturnType<typeof findeOffsetKandidaten>;
+    ausgaben: Awaited<ReturnType<typeof ausgabenUm>>;
+  }> = [];
+
+  for (const e of eingaenge) {
+    const ausgaben = await ausgabenFuer(e.bookingDate);
+    const kandidaten = findeOffsetKandidaten(
+      { id: e.id, bookingDate: e.bookingDate, amount: e.amount, counterparty: e.counterparty },
+      ausgaben,
+    );
+    if (kandidaten.length > 0) verrechnungen.push({ eingang: e, kandidaten, ausgaben });
+  }
+  verrechnungen.sort((a, b) => b.eingang.amount - a.eingang.amount);
 
   const zuVerrechnenIds = new Set(verrechnungen.map((v) => v.eingang.id));
   const zuOrdnen = offen.filter((o) => !zuVerrechnenIds.has(o.id));
@@ -74,7 +92,7 @@ export default async function Pruefen() {
                 key={v.eingang.id}
                 eingang={v.eingang}
                 kandidaten={v.kandidaten}
-                ausgaben={ausgabenUm(v.eingang.bookingDate, 120)}
+                ausgaben={v.ausgaben}
               />
             ))}
           </div>

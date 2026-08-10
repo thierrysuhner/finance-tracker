@@ -10,7 +10,9 @@
 
 FROM node:22-alpine AS deps
 WORKDIR /app
-# better-sqlite3 wird nativ übersetzt, dafür braucht es eine Toolchain.
+# libSQL liefert vorkompilierte Binärdateien für musl mit, auch für ARM.
+# Die Toolchain bleibt als Rückfallebene, falls für eine Plattform einmal
+# keine passende Binärdatei existiert — die Stufe wird ohnehin verworfen.
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -42,11 +44,9 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Hinweis: better-sqlite3 muss NICHT separat kopiert werden. Next.js nimmt das
-# Paket samt kompilierter Binärdatei ins Standalone-Bündel auf — geprüft mit
-#   find .next/standalone/node_modules/better-sqlite3 -name '*.node'
-# Da das Bündel in derselben Alpine-Stufe entsteht, passt die Binärdatei zur
-# Laufzeitumgebung.
+# Hinweis: die nativen Bindungen von libSQL müssen NICHT separat kopiert
+# werden. Next.js nimmt sie ins Standalone-Bündel auf, und da dieses in
+# derselben Alpine-Stufe entsteht, passt die musl-Variante zur Laufzeit.
 
 # Die Datenbank liegt im Volume, nicht im Abbild — sonst wäre sie bei jedem
 # Update weg.

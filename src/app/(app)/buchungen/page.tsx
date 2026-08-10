@@ -1,4 +1,4 @@
-import { getSqlite } from "@/db";
+import { getDb } from "@/db";
 import { verfuegbareMonate } from "@/server/queries";
 import { formatRappen } from "@/core/money";
 import { CATEGORY_BY_SLUG } from "@/core/categorize/categories";
@@ -31,25 +31,25 @@ export default async function Buchungen({
   searchParams: Promise<{ monat?: string; kategorie?: string }>;
 }) {
   const { monat: gewaehlt, kategorie } = await searchParams;
-  const monate = verfuegbareMonate();
+  const monate = await verfuegbareMonate();
   const monat = gewaehlt && monate.includes(gewaehlt) ? gewaehlt : monate[0];
 
+  const db = await getDb();
   const zeilen = monat
-    ? (getSqlite()
-        .prepare(
-          `SELECT t.id, t.booking_date AS bookingDate, t.amount,
-                  MIN(0, t.amount + COALESCE((SELECT SUM(o.amount) FROM transactions o
-                    WHERE o.offset_of = t.id), 0)) AS nettoAmount,
-                  t.counterparty, t.category_slug AS categorySlug,
-                  t.necessity_override AS necessityOverride, t.source, t.place,
-                  t.reviewed, t.treatment,
-                  (SELECT SUM(o.amount) FROM transactions o WHERE o.offset_of = t.id) AS offsetSumme
-           FROM transactions t
-           WHERE t.offset_of IS NULL AND substr(t.booking_date,1,7) = ?
-             ${kategorie ? "AND t.category_slug = ?" : ""}
-           ORDER BY t.booking_date DESC, t.id DESC`,
-        )
-        .all(...(kategorie ? [monat, kategorie] : [monat])) as Zeile[])
+    ? await db.all<Zeile>(
+        `SELECT t.id, t.booking_date AS bookingDate, t.amount,
+                MIN(0, t.amount + COALESCE((SELECT SUM(o.amount) FROM transactions o
+                  WHERE o.offset_of = t.id), 0)) AS nettoAmount,
+                t.counterparty, t.category_slug AS categorySlug,
+                t.necessity_override AS necessityOverride, t.source, t.place,
+                t.reviewed, t.treatment,
+                (SELECT SUM(o.amount) FROM transactions o WHERE o.offset_of = t.id) AS offsetSumme
+         FROM transactions t
+         WHERE t.offset_of IS NULL AND substr(t.booking_date,1,7) = ?
+           ${kategorie ? "AND t.category_slug = ?" : ""}
+         ORDER BY t.booking_date DESC, t.id DESC`,
+        kategorie ? [monat, kategorie] : [monat],
+      )
     : [];
 
   return (

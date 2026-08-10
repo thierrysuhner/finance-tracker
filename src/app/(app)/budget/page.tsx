@@ -15,7 +15,7 @@ export default async function Budget({
   searchParams: Promise<{ monat?: string }>;
 }) {
   const { monat: gewaehlt } = await searchParams;
-  const monate = verfuegbareMonate();
+  const monate = await verfuegbareMonate();
   if (monate.length === 0) {
     return (
       <Karte>
@@ -25,9 +25,9 @@ export default async function Budget({
   }
 
   const monat = gewaehlt && monate.includes(gewaehlt) ? gewaehlt : monate[0];
-  const zeilen = budgetVergleich(monat);
-  const vorschau = prognose(6);
-  const wiederkehrend = erkenneWiederkehrend();
+  const zeilen = await budgetVergleich(monat);
+  const vorschau = await prognose(6);
+  const wiederkehrend = await erkenneWiederkehrend();
 
   const hatBudgets = zeilen.some((z) => z.budget !== null);
   const budgetSumme = zeilen.reduce((a, z) => a + (z.budget ?? 0), 0);

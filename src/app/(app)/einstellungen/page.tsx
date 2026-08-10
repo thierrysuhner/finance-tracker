@@ -1,4 +1,4 @@
-import { getJsonSetting, getSetting, getSqlite, SETTING_KEYS } from "@/db";
+import { getJsonSetting, getSetting, getDb, SETTING_KEYS } from "@/db";
 import { pruefeDeckung } from "@/server/import";
 import { formatRappen } from "@/core/money";
 import { speichereEinstellungen, abmelden, speichereKi } from "@/app/actions";
@@ -9,20 +9,24 @@ import { PasswortFormular } from "./PasswortFormular";
 export const dynamic = "force-dynamic";
 
 export default async function Einstellungen() {
-  const namen = getJsonSetting<string[]>(SETTING_KEYS.ownNames, []);
-  const ibans = getJsonSetting<string[]>(SETTING_KEYS.ownIbans, []);
-  const investIbans = getJsonSetting<string[]>(SETTING_KEYS.investmentIbans, []);
-  const linkedIbans = getJsonSetting<string[]>(SETTING_KEYS.linkedIbans, []);
-  const luecken = pruefeDeckung();
-  const schwelle = Number(getSetting(SETTING_KEYS.reviewThreshold)) || DEFAULT_REVIEW_THRESHOLD;
+  const db = await getDb();
+  const [namen, ibans, investIbans, linkedIbans, luecken, rohSchwelle, kiAnbieter, kiSchluesselWert, gelerntRow] =
+    await Promise.all([
+      getJsonSetting<string[]>(SETTING_KEYS.ownNames, []),
+      getJsonSetting<string[]>(SETTING_KEYS.ownIbans, []),
+      getJsonSetting<string[]>(SETTING_KEYS.investmentIbans, []),
+      getJsonSetting<string[]>(SETTING_KEYS.linkedIbans, []),
+      pruefeDeckung(),
+      getSetting(SETTING_KEYS.reviewThreshold),
+      getSetting(SETTING_KEYS.aiProvider),
+      getSetting(SETTING_KEYS.aiApiKey),
+      db.get<{ n: number }>("SELECT COUNT(*) n FROM merchant_memory"),
+    ]);
 
-  const gelernt = (
-    getSqlite().prepare("SELECT COUNT(*) n FROM merchant_memory").get() as { n: number }
-  ).n;
-
-  const kiAnbieter = getSetting(SETTING_KEYS.aiProvider);
+  const schwelle = Number(rohSchwelle) || DEFAULT_REVIEW_THRESHOLD;
+  const gelernt = gelerntRow?.n ?? 0;
   // Der Schlüssel selbst wird nie ins Formular zurückgegeben, nur ob einer da ist.
-  const kiSchluessel = Boolean(getSetting(SETTING_KEYS.aiApiKey));
+  const kiSchluessel = Boolean(kiSchluesselWert);
 
   return (
     <div className="flex flex-col gap-5">

@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { importiere, protokolliere, verknuepfeKontoAufladungen, pruefeDeckung } from "../src/server/import";
-import { getSqlite, setJsonSetting, getJsonSetting, SETTING_KEYS } from "../src/db/index";
+import { getDb, setJsonSetting, SETTING_KEYS } from "../src/db/index";
 import { formatRappen } from "../src/core/money";
 
 const dateien = process.argv.slice(2);
@@ -18,18 +18,19 @@ if (dateien.length === 0) {
 
 // Beim ersten Lauf die eigenen Konten hinterlegen, damit Überträge aufs eigene
 // Konto nicht als Ausgabe zählen. Später geschieht das in den Einstellungen.
-function setzeAusUmgebung(variable: string, schluessel: string, label: string) {
+async function setzeAusUmgebung(variable: string, schluessel: string, label: string) {
   const wert = process.env[variable];
   if (!wert) return;
   const liste = wert.split(";").map((s) => s.trim()).filter(Boolean);
-  setJsonSetting(schluessel, liste);
+  await setJsonSetting(schluessel, liste);
   console.log(`${label}: ${liste.join(", ")}`);
 }
 
-setzeAusUmgebung("OWN_NAMES", SETTING_KEYS.ownNames, "Eigene Namen");
-setzeAusUmgebung("OWN_IBANS", SETTING_KEYS.ownIbans, "Eigene Konten");
-setzeAusUmgebung("INVESTMENT_IBANS", SETTING_KEYS.investmentIbans, "Anlagekonten");
-setzeAusUmgebung("LINKED_IBANS", SETTING_KEYS.linkedIbans, "Verknüpfte Konten");
+async function main() {
+await setzeAusUmgebung("OWN_NAMES", SETTING_KEYS.ownNames, "Eigene Namen");
+await setzeAusUmgebung("OWN_IBANS", SETTING_KEYS.ownIbans, "Eigene Konten");
+await setzeAusUmgebung("INVESTMENT_IBANS", SETTING_KEYS.investmentIbans, "Anlagekonten");
+await setzeAusUmgebung("LINKED_IBANS", SETTING_KEYS.linkedIbans, "Verknüpfte Konten");
 
 for (const datei of dateien) {
   if (!fs.existsSync(datei)) {
@@ -37,8 +38,8 @@ for (const datei of dateien) {
     continue;
   }
   const inhalt = fs.readFileSync(datei, "utf-8");
-  const e = importiere(path.basename(datei), inhalt);
-  protokolliere(e);
+  const e = await importiere(path.basename(datei), inhalt);
+  await protokolliere(e);
 
   console.log(`\n${"─".repeat(60)}`);
   console.log(`${e.dateiname}  [${e.quelle}]`);
@@ -63,12 +64,12 @@ for (const datei of dateien) {
 }
 
 // Nachbereitung: Aufladungen verknüpfen und Deckung prüfen.
-const verknuepft = verknuepfeKontoAufladungen();
+const verknuepft = await verknuepfeKontoAufladungen();
 if (verknuepft > 0) {
   console.log(`\n${verknuepft} Aufladungen des verknüpften Kontos erkannt und neutral gestellt.`);
 }
 
-const luecken = pruefeDeckung();
+const luecken = await pruefeDeckung();
 if (luecken.length > 0) {
   console.log("\n⚠️  DECKUNGSLÜCKE");
   for (const l of luecken) {
@@ -82,17 +83,15 @@ if (luecken.length > 0) {
 }
 
 // Gesamtübersicht
-const db = getSqlite();
-const summe = db
-  .prepare(
+const db = await getDb();
+const summe = await db.get<any>(
     `SELECT COUNT(*) n,
             SUM(CASE WHEN amount < 0 AND treatment = 'normal' THEN amount ELSE 0 END) ausgaben,
             SUM(CASE WHEN amount > 0 AND treatment = 'normal' THEN amount ELSE 0 END) einnahmen,
             SUM(CASE WHEN treatment = 'neutral' THEN 1 ELSE 0 END) neutral,
             SUM(CASE WHEN category_slug IS NULL OR confidence < 0.75 THEN 1 ELSE 0 END) offen
      FROM transactions`,
-  )
-  .get() as any;
+  );
 
 console.log(`\n${"═".repeat(60)}`);
 console.log("BESTAND IN DER DATENBANK");
@@ -103,3 +102,9 @@ console.log(`Einnahmen:         ${formatRappen(summe.einnahmen ?? 0, { sign: tru
 console.log(`Neutral gestellt:  ${summe.neutral} (Eigenüberträge, Kartenausgleich)`);
 console.log(`Offene Zuordnung:  ${summe.offen}`);
 console.log("═".repeat(60));
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

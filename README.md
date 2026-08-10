@@ -24,10 +24,10 @@ Ausgabenstatistik nicht verzerren.
 4. **Alle Dateien unter `/import` hochladen.** Das Format wird am Inhalt
    erkannt, nicht am Dateinamen. Bereits bekannte Buchungen werden erkannt und
    übersprungen — die Exporte sind kumulativ, das ist eingeplant.
-4. **Unter `/pruefen` die offenen Fälle zuordnen.** Erfahrungsgemäss ein gutes
+5. **Unter `/pruefen` die offenen Fälle zuordnen.** Erfahrungsgemäss ein gutes
    Dutzend pro Monat, sortiert nach Betrag. Jede Entscheidung wird gelernt und
    nicht wieder gefragt.
-5. **Bargeld nachtragen** unter `/buchungen`, falls etwas ausserhalb von Konto
+6. **Bargeld nachtragen** unter `/buchungen`, falls etwas ausserhalb von Konto
    und Karte gelaufen ist.
 
 ---
@@ -125,6 +125,10 @@ echo "SESSION_SECRET=$(openssl rand -base64 48)" > .env.local
 npm run dev
 ```
 
+Ohne weitere Angabe landet die Datenbank in `data/finance.db`. Ein anderer Ort
+lässt sich über `DATABASE_PATH` setzen; ist `TURSO_DATABASE_URL` gesetzt, wird
+stattdessen die entfernte Datenbank verwendet.
+
 Beim ersten Aufruf wird das Passwort gesetzt. Es gibt keine
 Zurücksetzen-Funktion — geht es verloren, hilft nur das Bearbeiten der
 Datenbankdatei.
@@ -136,23 +140,50 @@ die Datenbank bestehen bleibt**. Das schliesst zwei naheliegende Optionen aus:
 
 | Plattform | Geeignet? | Grund |
 |---|---|---|
-| **GitHub Pages** | nein | Liefert nur statische Dateien aus. Login, Server Actions und Datenbank haben dort keine Laufzeit. |
-| **Vercel** | nur mit Umbau | Das Dateisystem ist schreibgeschützt, `/tmp` wird bei jedem Kaltstart geleert. Die SQLite-Datei wäre regelmässig leer. Nötig wäre eine externe Datenbank (siehe unten). |
-| **Eigener Server / VPS** | ja, gratis wenn vorhanden | `docker compose up -d`. Volle Datenhoheit, keine zusätzlichen Kosten. |
+| **Vercel + Turso** | ja, dauerhaft gratis | Empfohlen. `git push` genügt, keine Wartung. Beide Gratis-Stufen sind für einen Nutzer weit überdimensioniert. |
+| **Eigener Server / VPS** | ja, gratis wenn vorhanden | `docker compose up -d`. Volle Datenhoheit. |
 | **Oracle Cloud Always Free** | ja, dauerhaft gratis | ARM-VM mit Docker. Selbst verwaltet, Einrichtung dauert eine Stunde. |
-| **Fly.io, Railway** | ja, aber kostenpflichtig | Echtes Volume, Deploy per Kommando. Fly.io hat den Gratis-Tarif im Oktober 2024 abgeschafft. |
+| **Fly.io, Railway** | ja, aber kostenpflichtig | Der Gratis-Tarif von Fly.io wurde im Oktober 2024 abgeschafft; mit `fly.toml` sind ein bis drei Franken im Monat zu erwarten. |
+| **GitHub Pages** | nein | Liefert nur statische Dateien aus. Login, Server Actions und Datenbank haben dort keine Laufzeit. |
 
-### Kosten
+### Vercel mit Turso (empfohlen)
 
-Der Gratis-Tarif von Fly.io existiert seit Oktober 2024 nicht mehr; neue Konten
-laufen nach einer kurzen Testphase rein nutzungsbasiert. Mit der Konfiguration
-in `fly.toml` — Maschine fährt bei Inaktivität herunter, 1 GB Volume — sind
-etwa **1 bis 3 Franken im Monat** zu erwarten.
+Vercels Dateisystem ist flüchtig — eine SQLite-Datei wäre nach jedem Kaltstart
+leer. Deshalb liegt die Datenbank bei **Turso**, einem SQLite-Abkömmling.
+Dieselbe Anwendung spricht beide an, es ändert sich nur die Verbindung.
 
-Dauerhaft gratis bleiben zwei Wege: ein Server, den man ohnehin hat, und die
-Always-Free-Stufe von Oracle Cloud. Letztere wurde am 15. Juni 2026 halbiert
-(auf 2 ARM-Kerne und 12 GB), reicht für diese Anwendung aber immer noch
-um ein Vielfaches.
+```bash
+# 1. Datenbank anlegen
+turso db create finanzen
+turso db show finanzen --url          # -> libsql://…
+turso db tokens create finanzen       # -> Zugriffstoken
+
+# 2. Bei Vercel hinterlegen (Settings → Environment Variables)
+#    TURSO_DATABASE_URL   libsql://…
+#    TURSO_AUTH_TOKEN     …
+#    SESSION_SECRET       openssl rand -base64 48
+
+# 3. Repository verbinden und deployen
+vercel --prod
+```
+
+**Bestehende Daten übernehmen.** Die Ersteinrichtung geht lokal deutlich
+schneller — Dateien importieren, Zuordnungen treffen, alles ohne Netz. Der
+fertige Stand wandert danach in einem Schritt hinüber:
+
+```bash
+TURSO_DATABASE_URL=libsql://… TURSO_AUTH_TOKEN=… \
+  npx tsx scripts/nach-turso.ts data/finance.db
+```
+
+Das Werkzeug leert die Zieldatenbank, überträgt in Blöcken und prüft am Ende,
+ob auf beiden Seiten gleich viele Buchungen liegen.
+
+**Was das kostet:** nichts. Vercels Hobby-Stufe ist für private Projekte
+gratis, Turso erlaubt 5 GB und 500 Millionen gelesene Zeilen im Monat — eine
+Datenbank mit ein paar tausend Buchungen bewegt sich in einer anderen
+Grössenordnung. **Was es kostet, ist die Datenhoheit:** deine Kontodaten
+liegen dann bei zwei US-Anbietern statt auf einer Maschine, die dir gehört.
 
 ### Fly.io
 
@@ -176,20 +207,6 @@ docker compose up -d
 Der Dienst lauscht bewusst nur auf `127.0.0.1:3000`. Davor gehört ein Reverse
 Proxy mit HTTPS (Caddy, nginx, Traefik) — ohne Verschlüsselung wandert das
 Passwort im Klartext durchs Netz.
-
-### Falls es unbedingt Vercel sein soll
-
-Dann muss die Speicherschicht auf eine Datenbank umgestellt werden, die über
-das Netz erreichbar ist. **Turso** wäre der kleinste Eingriff, weil es ein
-SQLite-Abkömmling ist und jede vorhandene SQL-Anweisung gültig bleibt —
-einschliesslich `julianday()`, `MIN(0, x)` und `ON CONFLICT`, die bei
-PostgreSQL alle umgeschrieben werden müssten.
-
-Der Aufwand liegt woanders: `better-sqlite3` arbeitet synchron, ein
-Netzwerktreiber zwangsläufig asynchron. Betroffen sind **72 Aufrufstellen in
-10 Dateien**. Die Umstellung ist mechanisch, aber die Testabdeckung liegt
-heute auf der Fachlogik, nicht auf der Datenbankschicht — ein solcher Umbau
-sollte also von Tests für die Abfragen begleitet werden.
 
 ### Backup
 
@@ -231,7 +248,7 @@ src/
     categorize/      Kategorien, Regelwerk, Stufenlogik, optionale KI
     offset/          Verrechnung von Splits, Retouren und Kautionen
     money.ts         Rappen als Ganzzahlen, Median statt Durchschnitt
-  db/                SQLite-Schema und Zugriff
+  db/                Schema und Zugriff über libSQL (lokale Datei oder Turso)
   server/            Import, Auswertungen, Budget — alles serverseitig
   app/               Oberfläche (Next.js App Router)
 tests/               Testsuite

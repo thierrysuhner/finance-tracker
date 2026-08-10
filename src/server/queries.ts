@@ -1,5 +1,5 @@
-import { getSqlite } from "@/db";
-import { CATEGORY_BY_SLUG, CATEGORIES } from "@/core/categorize/categories";
+import { getDb } from "@/db";
+import { CATEGORY_BY_SLUG } from "@/core/categorize/categories";
 import { median } from "@/core/money";
 import type { Necessity } from "@/core/types";
 
@@ -37,6 +37,12 @@ const NETTO = `
 /** Buchungen, die als Verrechnung an einer anderen hängen, zählen nicht doppelt. */
 const NUR_HAUPTBUCHUNGEN = `t.offset_of IS NULL`;
 
+/** Kleinster Betrag je Belastung, der als Dauerauftrag durchgeht — in Rappen. */
+export const MIN_DAUERAUFTRAG = 1400;
+
+/** Kleinstes Monatsäquivalent, damit ein Posten fürs Planen zählt — in Rappen. */
+export const MIN_MONATSAEQUIVALENT = 1400;
+
 export interface KategorieSumme {
   slug: string;
   label: string;
@@ -65,24 +71,23 @@ function notwendigkeit(slug: string | null, override: string | null): Necessity 
   return CATEGORY_BY_SLUG.get(slug)?.necessity ?? "freiwillig";
 }
 
-export function monatsUebersicht(monat: string): MonatsUebersicht {
-  const db = getSqlite();
+export async function monatsUebersicht(monat: string): Promise<MonatsUebersicht> {
+  const db = await getDb();
 
-  const zeilen = db
-    .prepare(
-      `SELECT t.category_slug AS slug, t.necessity_override AS override,
-              SUM(${NETTO}) AS betrag, COUNT(*) AS anzahl, t.treatment AS treatment
-       FROM transactions t
-       WHERE ${NUR_HAUPTBUCHUNGEN} AND substr(t.booking_date, 1, 7) = ?
-       GROUP BY t.category_slug, t.necessity_override, t.treatment`,
-    )
-    .all(monat) as Array<{
+  const zeilen = await db.all<{
     slug: string | null;
     override: string | null;
     betrag: number;
     anzahl: number;
     treatment: string;
-  }>;
+  }>(
+    `SELECT t.category_slug AS slug, t.necessity_override AS override,
+            SUM(${NETTO}) AS betrag, COUNT(*) AS anzahl, t.treatment AS treatment
+     FROM transactions t
+     WHERE ${NUR_HAUPTBUCHUNGEN} AND substr(t.booking_date, 1, 7) = ?
+     GROUP BY t.category_slug, t.necessity_override, t.treatment`,
+    [monat],
+  );
 
   const kategorien = new Map<string, KategorieSumme>();
   const nachNotwendigkeit: Record<Necessity, number> = {
@@ -126,13 +131,12 @@ export function monatsUebersicht(monat: string): MonatsUebersicht {
     }
   }
 
-  const offen = db
-    .prepare(
-      `SELECT COUNT(*) n FROM transactions t
-       WHERE ${NUR_HAUPTBUCHUNGEN} AND substr(t.booking_date,1,7) = ?
-         AND t.reviewed = 0 AND (t.category_slug IS NULL OR t.confidence < 0.75)`,
-    )
-    .get(monat) as { n: number };
+  const offen = await db.get<{ n: number }>(
+    `SELECT COUNT(*) n FROM transactions t
+     WHERE ${NUR_HAUPTBUCHUNGEN} AND substr(t.booking_date,1,7) = ?
+       AND t.reviewed = 0 AND (t.category_slug IS NULL OR t.confidence < 0.75)`,
+    [monat],
+  );
 
   return {
     monat,
@@ -141,7 +145,7 @@ export function monatsUebersicht(monat: string): MonatsUebersicht {
     saldo: einnahmen + ausgaben,
     nachNotwendigkeit,
     kategorien: [...kategorien.values()].sort((a, b) => a.betrag - b.betrag),
-    offeneAnzahl: offen.n,
+    offeneAnzahl: offen?.n ?? 0,
     neutralSumme,
   };
 }
@@ -156,18 +160,18 @@ export interface MonatsPunkt {
 }
 
 /** Verlauf über die letzten Monate — Grundlage für Trend und Budgetvorschlag. */
-export function monatsReihe(): MonatsPunkt[] {
-  const db = getSqlite();
-  const zeilen = db
-    .prepare(
-      `SELECT substr(t.booking_date,1,7) AS monat, t.category_slug AS slug,
-              t.necessity_override AS override, SUM(${NETTO}) AS betrag
-       FROM transactions t
-       WHERE ${NUR_HAUPTBUCHUNGEN} AND t.treatment = 'normal'
-       GROUP BY monat, t.category_slug, t.necessity_override
-       ORDER BY monat`,
-    )
-    .all() as Array<{ monat: string; slug: string | null; override: string | null; betrag: number }>;
+export async function monatsReihe(): Promise<MonatsPunkt[]> {
+  const db = await getDb();
+  const zeilen = await db.all<{
+    monat: string; slug: string | null; override: string | null; betrag: number;
+  }>(
+    `SELECT substr(t.booking_date,1,7) AS monat, t.category_slug AS slug,
+            t.necessity_override AS override, SUM(${NETTO}) AS betrag
+     FROM transactions t
+     WHERE ${NUR_HAUPTBUCHUNGEN} AND t.treatment = 'normal'
+     GROUP BY monat, t.category_slug, t.necessity_override
+     ORDER BY monat`,
+  );
 
   const map = new Map<string, MonatsPunkt>();
   for (const z of zeilen) {
@@ -212,58 +216,57 @@ export interface OffeneBuchung {
  * verändert die Auswertung deutlich, eine über 3 Franken kaum. Wer nur fünf
  * Minuten Zeit hat, soll die wirksamen zuerst sehen.
  */
-export function offeneBuchungen(limit = 200): OffeneBuchung[] {
-  return getSqlite()
-    .prepare(
-      `SELECT t.id, t.booking_date AS bookingDate, ${NETTO} AS amount,
-              t.counterparty, t.raw_text AS rawText, t.place,
-              t.category_slug AS categorySlug, t.confidence, t.reason,
-              t.source, t.issuer_category AS issuerCategory
-       FROM transactions t
-       WHERE ${NUR_HAUPTBUCHUNGEN} AND t.reviewed = 0
-         AND (t.category_slug IS NULL OR t.confidence < 0.75)
-       ORDER BY ABS(${NETTO}) DESC
-       LIMIT ?`,
-    )
-    .all(limit) as OffeneBuchung[];
+export async function offeneBuchungen(limit = 200): Promise<OffeneBuchung[]> {
+  const db = await getDb();
+  return db.all<OffeneBuchung>(
+    `SELECT t.id, t.booking_date AS bookingDate, ${NETTO} AS amount,
+            t.counterparty, t.raw_text AS rawText, t.place,
+            t.category_slug AS categorySlug, t.confidence, t.reason,
+            t.source, t.issuer_category AS issuerCategory
+     FROM transactions t
+     WHERE ${NUR_HAUPTBUCHUNGEN} AND t.reviewed = 0
+       AND (t.category_slug IS NULL OR t.confidence < 0.75)
+     ORDER BY ABS(${NETTO}) DESC
+     LIMIT ?`,
+    [limit],
+  );
 }
 
 /**
  * Findet Geldeingänge, für die noch keine Verrechnung festgelegt wurde.
  * Grundlage für die Vorschläge in der Nachfrage-Liste.
  */
-export function offeneEingaenge(): OffeneBuchung[] {
-  return getSqlite()
-    .prepare(
-      `SELECT t.id, t.booking_date AS bookingDate, t.amount,
-              t.counterparty, t.raw_text AS rawText, t.place,
-              t.category_slug AS categorySlug, t.confidence, t.reason,
-              t.source, t.issuer_category AS issuerCategory
-       FROM transactions t
-       WHERE t.amount > 0 AND t.offset_of IS NULL AND t.treatment != 'neutral'
-         AND (t.category_slug = 'erstattung' OR t.counterparty_phone IS NOT NULL)
-         AND t.reviewed = 0
-       ORDER BY t.booking_date DESC`,
-    )
-    .all() as OffeneBuchung[];
+export async function offeneEingaenge(): Promise<OffeneBuchung[]> {
+  const db = await getDb();
+  return db.all<OffeneBuchung>(
+    `SELECT t.id, t.booking_date AS bookingDate, t.amount,
+            t.counterparty, t.raw_text AS rawText, t.place,
+            t.category_slug AS categorySlug, t.confidence, t.reason,
+            t.source, t.issuer_category AS issuerCategory
+     FROM transactions t
+     WHERE t.amount > 0 AND t.offset_of IS NULL AND t.treatment != 'neutral'
+       AND (t.category_slug = 'erstattung' OR t.counterparty_phone IS NOT NULL)
+       AND t.reviewed = 0
+     ORDER BY t.booking_date DESC`,
+  );
 }
 
 /** Ausgaben im Zeitfenster um ein Datum — Kandidaten für eine Verrechnung. */
-export function ausgabenUm(datum: string, tage = 120) {
-  return getSqlite()
-    .prepare(
-      `SELECT t.id, t.booking_date AS bookingDate, t.amount, t.counterparty,
-              t.counterparty_phone AS counterpartyPhone, t.category_slug AS categorySlug
-       FROM transactions t
-       WHERE t.amount < 0 AND t.treatment = 'normal'
-         AND t.booking_date <= ?
-         AND julianday(?) - julianday(t.booking_date) <= ?
-       ORDER BY t.booking_date DESC`,
-    )
-    .all(datum, datum, tage) as Array<{
+export async function ausgabenUm(datum: string, tage = 120) {
+  const db = await getDb();
+  return db.all<{
     id: number; bookingDate: string; amount: number;
     counterparty: string | null; counterpartyPhone: string | null; categorySlug: string | null;
-  }>;
+  }>(
+    `SELECT t.id, t.booking_date AS bookingDate, t.amount, t.counterparty,
+            t.counterparty_phone AS counterpartyPhone, t.category_slug AS categorySlug
+     FROM transactions t
+     WHERE t.amount < 0 AND t.treatment = 'normal'
+       AND t.booking_date <= ?
+       AND julianday(?) - julianday(t.booking_date) <= ?
+     ORDER BY t.booking_date DESC`,
+    [datum, datum, tage],
+  );
 }
 
 export interface HaendlerSumme {
@@ -273,22 +276,21 @@ export interface HaendlerSumme {
   kategorie: string | null;
 }
 
-export function topHaendler(monat: string | null, limit = 12): HaendlerSumme[] {
-  const db = getSqlite();
+export async function topHaendler(monat: string | null, limit = 12): Promise<HaendlerSumme[]> {
+  const db = await getDb();
   const filter = monat ? "AND substr(t.booking_date,1,7) = ?" : "";
   const args = monat ? [monat, limit] : [limit];
-  return db
-    .prepare(
-      `SELECT t.counterparty, COUNT(*) AS anzahl, SUM(${NETTO}) AS betrag,
-              MAX(t.category_slug) AS kategorie
-       FROM transactions t
-       WHERE ${NUR_HAUPTBUCHUNGEN} AND t.treatment = 'normal' AND t.amount < 0
-         AND t.counterparty IS NOT NULL ${filter}
-       GROUP BY t.counterparty
-       ORDER BY betrag ASC
-       LIMIT ?`,
-    )
-    .all(...args) as HaendlerSumme[];
+  return db.all<HaendlerSumme>(
+    `SELECT t.counterparty, COUNT(*) AS anzahl, SUM(${NETTO}) AS betrag,
+            MAX(t.category_slug) AS kategorie
+     FROM transactions t
+     WHERE ${NUR_HAUPTBUCHUNGEN} AND t.treatment = 'normal' AND t.amount < 0
+       AND t.counterparty IS NOT NULL ${filter}
+     GROUP BY t.counterparty
+     ORDER BY betrag ASC
+     LIMIT ?`,
+    args,
+  );
 }
 
 export interface WiederkehrenderPosten {
@@ -309,24 +311,18 @@ export interface WiederkehrenderPosten {
  * Modell, das nur Monatsdurchschnitte kennt, verteilt sie entweder falsch auf
  * alle Monate oder übersieht sie ganz.
  */
-/** Kleinster Betrag je Belastung, der als Dauerauftrag durchgeht — in Rappen. */
-export const MIN_DAUERAUFTRAG = 1400;
-
-/** Kleinstes Monatsäquivalent, damit ein Posten fürs Planen zählt — in Rappen. */
-export const MIN_MONATSAEQUIVALENT = 1400;
-
-export function erkenneWiederkehrend(minVorkommen = 3): WiederkehrenderPosten[] {
-  const db = getSqlite();
-  const zeilen = db
-    .prepare(
-      `SELECT t.counterparty, t.booking_date AS datum, t.amount,
-              t.category_slug AS categorySlug
-       FROM transactions t
-       WHERE ${NUR_HAUPTBUCHUNGEN} AND t.treatment = 'normal' AND t.amount < 0
-         AND t.counterparty IS NOT NULL
-       ORDER BY t.counterparty, t.booking_date`,
-    )
-    .all() as Array<{ counterparty: string; datum: string; amount: number; categorySlug: string | null }>;
+export async function erkenneWiederkehrend(minVorkommen = 3): Promise<WiederkehrenderPosten[]> {
+  const db = await getDb();
+  const zeilen = await db.all<{
+    counterparty: string; datum: string; amount: number; categorySlug: string | null;
+  }>(
+    `SELECT t.counterparty, t.booking_date AS datum, t.amount,
+            t.category_slug AS categorySlug
+     FROM transactions t
+     WHERE ${NUR_HAUPTBUCHUNGEN} AND t.treatment = 'normal' AND t.amount < 0
+       AND t.counterparty IS NOT NULL
+     ORDER BY t.counterparty, t.booking_date`,
+  );
 
   const nachHaendler = new Map<string, typeof zeilen>();
   for (const z of zeilen) {
@@ -356,7 +352,7 @@ export function erkenneWiederkehrend(minVorkommen = 3): WiederkehrenderPosten[] 
      * Nur monatlich oder seltener.
      *
      * Kürzere Abstände sind keine Daueraufträge, sondern Gewohnheiten: sechs
-     * Besuche im selben Coop zu je drei Franken sehen rechnerisch wie ein
+     * Besuche im selben Laden zu je drei Franken sehen rechnerisch wie ein
      * zweiwöchentlicher Rhythmus aus, sind aber nichts, was man planen könnte.
      */
     if (intervall < 25 || intervall > 400) continue;
@@ -366,8 +362,7 @@ export function erkenneWiederkehrend(minVorkommen = 3): WiederkehrenderPosten[] 
      *
      * Bei Monatsbeträgen ist das das entscheidende Unterscheidungsmerkmal:
      * Miete und Abos treffen den Stichtag, ein Ladenbesuch fällt auf
-     * zufällige Tage. Ohne die Prüfung landen Einkaufsgewohnheiten in der
-     * Fixkostenliste.
+     * zufällige Tage.
      *
      * Bei längeren Abständen wäre die Prüfung dagegen schädlich. Eine
      * Semestergebühr ist eine Rechnung mit Zahlungsfrist, kein Dauerauftrag —
@@ -386,23 +381,22 @@ export function erkenneWiederkehrend(minVorkommen = 3): WiederkehrenderPosten[] 
       if (amGleichenTag / tage.length < 0.7) continue;
     }
 
+    const betraege = liste.map((z) => z.amount);
+    const typisch = median(betraege);
+    const hoehe = Math.abs(typisch);
+
     /*
      * Zwei Untergrenzen, beide müssen erfüllt sein.
      *
      * 1. Je Belastung mindestens 14 Franken. Darunter gibt es schlicht keine
      *    Daueraufträge.
      *
-     * 2. Aufs Monat gerechnet ebenfalls mindestens 10 Franken. Diese zweite
+     * 2. Aufs Monat gerechnet ebenfalls mindestens 14 Franken. Diese zweite
      *    Hürde ist nötig, weil ein Restaurant mit festem Menüpreis, das man
      *    alle drei Monate besucht, rechnerisch exakt wie ein Abo aussieht:
      *    gleicher Betrag, regelmässiger Abstand. Unterscheiden lässt es sich
-     *    nur über die Frage, ob der Posten fürs Planen überhaupt zählt —
-     *    16.80 zweimal im Jahr sind keine Fixkosten.
+     *    nur über die Frage, ob der Posten fürs Planen überhaupt zählt.
      */
-    const betraege = liste.map((z) => z.amount);
-    const typisch = median(betraege);
-    const hoehe = Math.abs(typisch);
-
     if (hoehe < MIN_DAUERAUFTRAG) continue;
     if ((hoehe * 30) / intervall < MIN_MONATSAEQUIVALENT) continue;
 
@@ -438,16 +432,16 @@ export function erkenneWiederkehrend(minVorkommen = 3): WiederkehrenderPosten[] 
 }
 
 /** Alle Monate, für die Daten vorliegen — für die Monatsauswahl im UI. */
-export function verfuegbareMonate(): string[] {
-  return (
-    getSqlite()
-      .prepare(
-        `SELECT DISTINCT substr(booking_date,1,7) AS m FROM transactions ORDER BY m DESC`,
-      )
-      .all() as Array<{ m: string }>
-  ).map((r) => r.m);
+export async function verfuegbareMonate(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.all<{ m: string }>(
+    `SELECT DISTINCT substr(booking_date,1,7) AS m FROM transactions ORDER BY m DESC`,
+  );
+  return rows.map((r) => r.m);
 }
 
-export function anzahlBuchungen(): number {
-  return (getSqlite().prepare("SELECT COUNT(*) n FROM transactions").get() as { n: number }).n;
+export async function anzahlBuchungen(): Promise<number> {
+  const db = await getDb();
+  const r = await db.get<{ n: number }>("SELECT COUNT(*) n FROM transactions");
+  return r?.n ?? 0;
 }

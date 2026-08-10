@@ -21,7 +21,7 @@ export default async function Uebersicht({
 }) {
   const { monat: gewaehlt } = await searchParams;
 
-  if (anzahlBuchungen() === 0) {
+  if ((await anzahlBuchungen()) === 0) {
     return (
       <Karte>
         <Leer
@@ -40,13 +40,13 @@ export default async function Uebersicht({
     );
   }
 
-  const monate = verfuegbareMonate();
+  const monate = await verfuegbareMonate();
   const monat = gewaehlt && monate.includes(gewaehlt) ? gewaehlt : monate[0];
 
-  const u = monatsUebersicht(monat);
-  const reihe = monatsReihe();
-  const haendler = topHaendler(monat, 6);
-  const budgets = budgetVergleich(monat);
+  const u = await monatsUebersicht(monat);
+  const reihe = await monatsReihe();
+  const haendler = await topHaendler(monat, 6);
+  const budgets = await budgetVergleich(monat);
 
   // Vergleich mit dem typischen Monat, damit die Zahl einen Massstab bekommt.
   const abgeschlossene = reihe.filter((p) => p.monat !== monat && p.ausgaben > 0);
@@ -309,7 +309,7 @@ export default async function Uebersicht({
  * einer Kategorie. Genau das soll ein Tracker sichtbar machen.
  */
 async function KleinviehHinweis({ monat }: { monat: string }) {
-  const alle = topHaendler(null, 60);
+  const alle = await topHaendler(null, 60);
   const kandidat = alle
     .filter((h) => h.anzahl >= 10)
     .map((h) => ({ ...h, schnitt: Math.abs(h.betrag) / h.anzahl }))

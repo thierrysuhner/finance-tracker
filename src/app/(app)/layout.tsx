@@ -11,7 +11,7 @@ import { offeneBuchungen } from "@/server/queries";
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   let offene = 0;
   try {
-    offene = offeneBuchungen(500).length;
+    offene = (await offeneBuchungen(500)).length;
   } catch {
     // Datenbank noch leer oder nicht erreichbar — die App bleibt bedienbar.
   }

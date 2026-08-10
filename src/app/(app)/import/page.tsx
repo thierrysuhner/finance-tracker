@@ -1,21 +1,20 @@
-import { getSqlite } from "@/db";
+import { getDb } from "@/db";
 import { Karte, KartenTitel } from "@/components/ui";
 import { ImportFormular } from "./ImportFormular";
 
 export const dynamic = "force-dynamic";
 
 export default async function Import() {
-  const letzte = getSqlite()
-    .prepare(
-      `SELECT filename, source, imported_at, period_from, period_to,
-              new_count, duplicate_count
-       FROM imports ORDER BY id DESC LIMIT 10`,
-    )
-    .all() as Array<{
+  const db = await getDb();
+  const letzte = await db.all<{
     filename: string; source: string; imported_at: string;
     period_from: string | null; period_to: string | null;
     new_count: number; duplicate_count: number;
-  }>;
+  }>(
+    `SELECT filename, source, imported_at, period_from, period_to,
+            new_count, duplicate_count
+     FROM imports ORDER BY id DESC LIMIT 10`,
+  );
 
   return (
     <div className="flex flex-col gap-5">

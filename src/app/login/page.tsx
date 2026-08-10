@@ -9,7 +9,7 @@ export default async function Login({
   searchParams: Promise<{ weiter?: string }>;
 }) {
   const { weiter } = await searchParams;
-  const eingerichtet = istEingerichtet();
+  const eingerichtet = await istEingerichtet();
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">

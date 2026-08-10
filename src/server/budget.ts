@@ -1,4 +1,4 @@
-import { getSqlite } from "@/db";
+import { getDb } from "@/db";
 import { median } from "@/core/money";
 import { AUSGABEN_KATEGORIEN, CATEGORY_BY_SLUG } from "@/core/categorize/categories";
 import { monatsReihe, erkenneWiederkehrend } from "./queries";
@@ -11,6 +11,15 @@ import type { Necessity } from "@/core/types";
  * dem Nichts. Das Tool schlägt vor, was du ohnehin ausgibst — die Entscheidung,
  * ob das so bleiben soll, liegt bei dir.
  */
+
+/** Netto-Ausgabe einer Buchung; identisch zum Ausdruck in queries.ts. */
+const NETTO_AUSGABE = `
+  CASE
+    WHEN t.amount < 0 THEN MIN(0, t.amount + COALESCE((
+      SELECT SUM(o.amount) FROM transactions o WHERE o.offset_of = t.id), 0))
+    ELSE 0
+  END
+`;
 
 export interface BudgetZeile {
   slug: string;
@@ -35,24 +44,20 @@ export interface BudgetZeile {
  * Ausreisser — die Semestergebühr, eine Reise — würde den Durchschnitt so
  * verschieben, dass der Vorschlag unbrauchbar wird.
  */
-export function budgetVorschlaege(): Map<string, { betrag: number; monate: number }> {
-  const db = getSqlite();
+export async function budgetVorschlaege(): Promise<Map<string, { betrag: number; monate: number }>> {
+  const db = await getDb();
   const aktuellerMonat = new Date().toISOString().slice(0, 7);
 
-  const zeilen = db
-    .prepare(
-      `SELECT substr(t.booking_date,1,7) AS monat, t.category_slug AS slug,
-              SUM(CASE
-                WHEN t.amount < 0 THEN MIN(0, t.amount + COALESCE((
-                  SELECT SUM(o.amount) FROM transactions o WHERE o.offset_of = t.id), 0))
-                ELSE 0 END) AS betrag
-       FROM transactions t
-       WHERE t.offset_of IS NULL AND t.treatment = 'normal'
-         AND t.amount < 0 AND t.category_slug IS NOT NULL
-         AND substr(t.booking_date,1,7) < ?
-       GROUP BY monat, t.category_slug`,
-    )
-    .all(aktuellerMonat) as Array<{ monat: string; slug: string; betrag: number }>;
+  const zeilen = await db.all<{ monat: string; slug: string; betrag: number }>(
+    `SELECT substr(t.booking_date,1,7) AS monat, t.category_slug AS slug,
+            SUM(${NETTO_AUSGABE}) AS betrag
+     FROM transactions t
+     WHERE t.offset_of IS NULL AND t.treatment = 'normal'
+       AND t.amount < 0 AND t.category_slug IS NOT NULL
+       AND substr(t.booking_date,1,7) < ?
+     GROUP BY monat, t.category_slug`,
+    [aktuellerMonat],
+  );
 
   const proKategorie = new Map<string, number[]>();
   const monateGesamt = new Set<string>();
@@ -74,14 +79,14 @@ export function budgetVorschlaege(): Map<string, { betrag: number; monate: numbe
   return ergebnis;
 }
 
-export function gesetzteBudgets(monat: string): Map<string, number> {
-  const rows = getSqlite()
-    .prepare(
-      `SELECT category_slug AS slug, amount FROM budgets
-       WHERE month = ? OR month IS NULL
-       ORDER BY month IS NULL DESC`, // monatsspezifisch schlägt Standard
-    )
-    .all(monat) as Array<{ slug: string; amount: number }>;
+export async function gesetzteBudgets(monat: string): Promise<Map<string, number>> {
+  const db = await getDb();
+  const rows = await db.all<{ slug: string; amount: number }>(
+    `SELECT category_slug AS slug, amount FROM budgets
+     WHERE month = ? OR month IS NULL
+     ORDER BY month IS NULL DESC`, // monatsspezifisch schlägt Standard
+    [monat],
+  );
 
   const map = new Map<string, number>();
   for (const r of rows) map.set(r.slug, r.amount); // spätere überschreiben
@@ -111,24 +116,21 @@ function hochrechnen(
   return Math.round((ist / tagImMonat) * tageImMonat);
 }
 
-export function budgetVergleich(monat: string): BudgetZeile[] {
-  const db = getSqlite();
-  const vorschlaege = budgetVorschlaege();
-  const gesetzt = gesetzteBudgets(monat);
+export async function budgetVergleich(monat: string): Promise<BudgetZeile[]> {
+  const db = await getDb();
+  const [vorschlaege, gesetzt] = await Promise.all([
+    budgetVorschlaege(),
+    gesetzteBudgets(monat),
+  ]);
 
-  const istZeilen = db
-    .prepare(
-      `SELECT t.category_slug AS slug,
-              SUM(CASE
-                WHEN t.amount < 0 THEN MIN(0, t.amount + COALESCE((
-                  SELECT SUM(o.amount) FROM transactions o WHERE o.offset_of = t.id), 0))
-                ELSE 0 END) AS betrag
-       FROM transactions t
-       WHERE t.offset_of IS NULL AND t.treatment = 'normal' AND t.amount < 0
-         AND substr(t.booking_date,1,7) = ?
-       GROUP BY t.category_slug`,
-    )
-    .all(monat) as Array<{ slug: string | null; betrag: number }>;
+  const istZeilen = await db.all<{ slug: string | null; betrag: number }>(
+    `SELECT t.category_slug AS slug, SUM(${NETTO_AUSGABE}) AS betrag
+     FROM transactions t
+     WHERE t.offset_of IS NULL AND t.treatment = 'normal' AND t.amount < 0
+       AND substr(t.booking_date,1,7) = ?
+     GROUP BY t.category_slug`,
+    [monat],
+  );
 
   const ist = new Map<string, number>();
   for (const z of istZeilen) ist.set(z.slug ?? "sonstiges", Math.abs(z.betrag));
@@ -178,9 +180,11 @@ export interface PrognosePunkt {
  * Rhythmus, plus dem typischen variablen Aufwand. Dadurch erscheint die
  * Semestergebühr im richtigen Monat statt als Zwölftel überall.
  */
-export function prognose(anzahlMonate = 6): PrognosePunkt[] {
-  const reihe = monatsReihe();
-  const wiederkehrend = erkenneWiederkehrend();
+export async function prognose(anzahlMonate = 6): Promise<PrognosePunkt[]> {
+  const [reihe, wiederkehrend] = await Promise.all([
+    monatsReihe(),
+    erkenneWiederkehrend(),
+  ]);
   const heute = new Date();
   const aktuellerMonat = heute.toISOString().slice(0, 7);
 
@@ -232,30 +236,36 @@ export function prognose(anzahlMonate = 6): PrognosePunkt[] {
 }
 
 /** Setzt oder entfernt ein Budget. */
-export function setzeBudget(slug: string, betrag: number | null, monat: string | null = null): void {
-  const db = getSqlite();
+export async function setzeBudget(
+  slug: string,
+  betrag: number | null,
+  monat: string | null = null,
+): Promise<void> {
+  const db = await getDb();
   if (betrag === null) {
-    db.prepare(
+    await db.run(
       `DELETE FROM budgets WHERE category_slug = ? AND IFNULL(month,'') = IFNULL(?,'')`,
-    ).run(slug, monat);
+      [slug, monat],
+    );
     return;
   }
-  db.prepare(
+  await db.run(
     `INSERT INTO budgets (category_slug, month, amount, updated_at)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(category_slug, IFNULL(month, '')) DO UPDATE SET
        amount = excluded.amount, updated_at = excluded.updated_at`,
-  ).run(slug, monat, Math.abs(betrag), new Date().toISOString());
+    [slug, monat, Math.abs(betrag), new Date().toISOString()],
+  );
 }
 
 /** Übernimmt alle Vorschläge als Standardbudget — für die Ersteinrichtung. */
-export function uebernehmeVorschlaege(): number {
-  const v = budgetVorschlaege();
+export async function uebernehmeVorschlaege(): Promise<number> {
+  const v = await budgetVorschlaege();
   let n = 0;
   for (const [slug, wert] of v) {
     if (wert.betrag <= 0) continue;
     if (!CATEGORY_BY_SLUG.has(slug)) continue;
-    setzeBudget(slug, wert.betrag, null);
+    await setzeBudget(slug, wert.betrag, null);
     n++;
   }
   return n;

@@ -1,4 +1,4 @@
-import { getSqlite, getSetting, getJsonSetting, SETTING_KEYS } from "@/db";
+import { getDb, getSetting, getJsonSetting, SETTING_KEYS, type SqlRunner } from "@/db";
 import { parseCamt053 } from "@/core/parsers/camt053";
 import { parseSwisscardCsv } from "@/core/parsers/swisscard";
 import { parseNeonCsv, istNeonCsv } from "@/core/parsers/neon";
@@ -54,7 +54,7 @@ export function erkenneFormat(
   return null;
 }
 
-export function importiere(dateiname: string, inhalt: string): ImportErgebnis {
+export async function importiere(dateiname: string, inhalt: string): Promise<ImportErgebnis> {
   const format = erkenneFormat(dateiname, inhalt);
   if (!format) {
     throw new Error(
@@ -68,9 +68,9 @@ export function importiere(dateiname: string, inhalt: string): ImportErgebnis {
   return importiereSwisscard(dateiname, inhalt);
 }
 
-function importiereNeon(dateiname: string, inhalt: string): ImportErgebnis {
+async function importiereNeon(dateiname: string, inhalt: string): Promise<ImportErgebnis> {
   const imp = parseNeonCsv(inhalt);
-  const res = schreibe(imp.transactions, "neon");
+  const res = await schreibe(imp.transactions, "neon");
   const daten = imp.transactions.map((t) => t.bookingDate).sort();
 
   return {
@@ -82,7 +82,7 @@ function importiereNeon(dateiname: string, inhalt: string): ImportErgebnis {
   };
 }
 
-function importiereCamt(dateiname: string, inhalt: string): ImportErgebnis {
+async function importiereCamt(dateiname: string, inhalt: string): Promise<ImportErgebnis> {
   const statements = parseCamt053(inhalt);
   const alle: ParsedTransaction[] = [];
   const warnungen: string[] = [];
@@ -111,7 +111,7 @@ function importiereCamt(dateiname: string, inhalt: string): ImportErgebnis {
     }
   }
 
-  const res = schreibe(alle, "camt053");
+  const res = await schreibe(alle, "camt053");
   return {
     quelle: "camt053",
     dateiname,
@@ -122,13 +122,13 @@ function importiereCamt(dateiname: string, inhalt: string): ImportErgebnis {
   };
 }
 
-function importiereSwisscard(dateiname: string, inhalt: string): ImportErgebnis {
+async function importiereSwisscard(dateiname: string, inhalt: string): Promise<ImportErgebnis> {
   const imp = parseSwisscardCsv(inhalt);
 
   // Die Ausgleichszahlungen werden mitgespeichert, aber als neutral markiert:
   // ihr Gegenstück steht bereits als SWISSCARD-Belastung im Bankauszug.
   const settlements = imp.settlements.map((t) => ({ ...t }));
-  const res = schreibe([...imp.transactions, ...settlements], "swisscard", {
+  const res = await schreibe([...imp.transactions, ...settlements], "swisscard", {
     neutralIds: new Set(settlements.map((t) => t.externalId)),
   });
 
@@ -142,31 +142,31 @@ function importiereSwisscard(dateiname: string, inhalt: string): ImportErgebnis 
   };
 }
 
-function schreibe(
+const EINFUEGEN = `
+  INSERT INTO transactions (
+    external_id, source, account_ref, card_ref, booking_date, value_date,
+    amount, currency, fx_currency, fx_amount, raw_text, counterparty,
+    counterparty_iban, counterparty_phone, tx_time, place, issuer_category,
+    issuer_mcc, bank_tx_code, category_slug, treatment, confidence, stage,
+    reason, reviewed, created_at, updated_at
+  ) VALUES (
+    @external_id, @source, @account_ref, @card_ref, @booking_date, @value_date,
+    @amount, @currency, @fx_currency, @fx_amount, @raw_text, @counterparty,
+    @counterparty_iban, @counterparty_phone, @tx_time, @place, @issuer_category,
+    @issuer_mcc, @bank_tx_code, @category_slug, @treatment, @confidence, @stage,
+    @reason, 0, @created_at, @updated_at
+  )
+  ON CONFLICT(source, external_id) DO NOTHING
+`;
+
+async function schreibe(
   transaktionen: ParsedTransaction[],
   quelle: string,
   opts: { neutralIds?: Set<string> } = {},
-): Omit<ImportErgebnis, "quelle" | "dateiname" | "zeitraum" | "saldoprobe"> {
-  const db = getSqlite();
-  const ctx = ladeKontext();
+): Promise<Omit<ImportErgebnis, "quelle" | "dateiname" | "zeitraum" | "saldoprobe">> {
+  const db = await getDb();
+  const ctx = await ladeKontext();
   const jetzt = new Date().toISOString();
-
-  const einfuegen = db.prepare(`
-    INSERT INTO transactions (
-      external_id, source, account_ref, card_ref, booking_date, value_date,
-      amount, currency, fx_currency, fx_amount, raw_text, counterparty,
-      counterparty_iban, counterparty_phone, tx_time, place, issuer_category,
-      issuer_mcc, bank_tx_code, category_slug, treatment, confidence, stage,
-      reason, reviewed, created_at, updated_at
-    ) VALUES (
-      @external_id, @source, @account_ref, @card_ref, @booking_date, @value_date,
-      @amount, @currency, @fx_currency, @fx_amount, @raw_text, @counterparty,
-      @counterparty_iban, @counterparty_phone, @tx_time, @place, @issuer_category,
-      @issuer_mcc, @bank_tx_code, @category_slug, @treatment, @confidence, @stage,
-      @reason, 0, @created_at, @updated_at
-    )
-    ON CONFLICT(source, external_id) DO NOTHING
-  `);
 
   let neu = 0;
   let bekannt = 0;
@@ -176,31 +176,31 @@ function schreibe(
 
   // Alles in einer Transaktion: bricht der Import ab, bleibt kein halber
   // Monat in der Datenbank zurück.
-  const lauf = db.transaction(() => {
-    for (const t of transaktionen) {
-      const vorschlag = categorize(t, ctx);
-      const istNeutral = opts.neutralIds?.has(t.externalId);
+  await db.tx(async (t: SqlRunner) => {
+    for (const tx of transaktionen) {
+      const vorschlag = categorize(tx, ctx);
+      const istNeutral = opts.neutralIds?.has(tx.externalId);
 
-      const info = einfuegen.run({
-        external_id: t.externalId,
+      const info = await t.run(EINFUEGEN, {
+        external_id: tx.externalId,
         source: quelle,
-        account_ref: t.accountRef,
-        card_ref: t.cardRef ?? null,
-        booking_date: t.bookingDate,
-        value_date: t.valueDate ?? null,
-        amount: t.amount,
-        currency: t.currency,
-        fx_currency: t.fxCurrency ?? null,
-        fx_amount: t.fxAmount ?? null,
-        raw_text: t.rawText,
-        counterparty: t.counterparty ?? null,
-        counterparty_iban: t.counterpartyIban ?? null,
-        counterparty_phone: t.counterpartyPhone ?? null,
-        tx_time: t.txTime ?? null,
-        place: t.place ?? null,
-        issuer_category: t.issuerCategory ?? null,
-        issuer_mcc: t.issuerMcc ?? null,
-        bank_tx_code: t.bankTxCode ?? null,
+        account_ref: tx.accountRef,
+        card_ref: tx.cardRef ?? null,
+        booking_date: tx.bookingDate,
+        value_date: tx.valueDate ?? null,
+        amount: tx.amount,
+        currency: tx.currency,
+        fx_currency: tx.fxCurrency ?? null,
+        fx_amount: tx.fxAmount ?? null,
+        raw_text: tx.rawText,
+        counterparty: tx.counterparty ?? null,
+        counterparty_iban: tx.counterpartyIban ?? null,
+        counterparty_phone: tx.counterpartyPhone ?? null,
+        tx_time: tx.txTime ?? null,
+        place: tx.place ?? null,
+        issuer_category: tx.issuerCategory ?? null,
+        issuer_mcc: tx.issuerMcc ?? null,
+        bank_tx_code: tx.bankTxCode ?? null,
         category_slug: istNeutral ? "kartenausgleich" : vorschlag.categorySlug,
         treatment: istNeutral ? "neutral" : (vorschlag.treatment ?? "normal"),
         confidence: istNeutral ? 1 : vorschlag.confidence,
@@ -224,74 +224,75 @@ function schreibe(
 
       if (beispiele.length < 8) {
         beispiele.push({
-          datum: t.bookingDate,
-          betrag: formatRappen(t.amount, { sign: true }),
-          gegenpartei: t.counterparty ?? "—",
+          datum: tx.bookingDate,
+          betrag: formatRappen(tx.amount, { sign: true }),
+          gegenpartei: tx.counterparty ?? "—",
           kategorie: istNeutral ? "kartenausgleich" : vorschlag.categorySlug,
         });
       }
     }
   });
 
-  lauf();
   return { neu, bekannt, offen, warnungen, beispiele };
 }
 
 /**
- * Verknüpft Aufladungen des neon-Kontos mit ihrem Gegenstück.
+ * Verknüpft Aufladungen eines verknüpften Kontos mit ihrem Gegenstück.
  *
- * Auf dem Hauptkonto steht die Belastung, auf dem neon-Auszug die Gutschrift —
- * derselbe Vorgang, zweimal erfasst. Würde die Gutschrift als Einnahme
- * gezählt, sähe jeder Reisemonat nach einem Geldsegen aus.
+ * Auf dem Hauptkonto steht die Belastung, auf dem anderen Auszug die
+ * Gutschrift — derselbe Vorgang, zweimal erfasst. Würde die Gutschrift als
+ * Einnahme gezählt, sähe jeder Reisemonat nach einem Geldsegen aus.
  *
- * Die Zuordnung erfolgt über Betrag und ein enges Zeitfenster, weil neon den
- * Absender nicht immer als Namen mitliefert (manchmal steht dort der
- * Verwendungszweck, etwa "Airbnb Prag").
+ * Die Zuordnung erfolgt über Betrag und ein enges Zeitfenster, weil der
+ * Absender nicht immer als Name mitgeliefert wird — manchmal steht dort der
+ * Verwendungszweck.
  */
-export function verknuepfeKontoAufladungen(): number {
-  const db = getSqlite();
+export async function verknuepfeKontoAufladungen(): Promise<number> {
+  const db = await getDb();
 
-  const eingaenge = db
-    .prepare(
-      `SELECT id, booking_date, amount FROM transactions
-       WHERE source = 'neon' AND amount > 0 AND treatment = 'normal' AND reviewed = 0`,
-    )
-    .all() as Array<{ id: number; booking_date: string; amount: number }>;
-
+  const eingaenge = await db.all<{ id: number; booking_date: string; amount: number }>(
+    `SELECT id, booking_date, amount FROM transactions
+     WHERE source = 'neon' AND amount > 0 AND treatment = 'normal' AND reviewed = 0`,
+  );
   if (eingaenge.length === 0) return 0;
-
-  const passendeBelastung = db.prepare(
-    `SELECT id FROM transactions
-     WHERE source = 'camt053' AND amount = ?
-       AND ABS(julianday(booking_date) - julianday(?)) <= 7
-     LIMIT 1`,
-  );
-
-  const markiere = db.prepare(
-    `UPDATE transactions
-     SET category_slug = 'eigenuebertrag', treatment = 'neutral', confidence = 1,
-         stage = 'struktur', reason = ?, updated_at = ?
-     WHERE id = ?`,
-  );
 
   let n = 0;
   const jetzt = new Date().toISOString();
-  db.transaction(() => {
+
+  await db.tx(async (t) => {
     for (const e of eingaenge) {
-      const treffer = passendeBelastung.get(-e.amount, e.booking_date) as
-        | { id: number }
-        | undefined;
+      const treffer = await t.get<{ id: number }>(
+        `SELECT id FROM transactions
+         WHERE source = 'camt053' AND amount = ?
+           AND ABS(julianday(booking_date) - julianday(?)) <= 7
+         LIMIT 1`,
+        [-e.amount, e.booking_date],
+      );
       if (!treffer) continue;
-      markiere.run(
-        "Aufladung vom Hauptkonto — die Belastung dort ist bereits erfasst",
-        jetzt,
-        e.id,
+
+      await t.run(
+        `UPDATE transactions
+         SET category_slug = 'eigenuebertrag', treatment = 'neutral', confidence = 1,
+             stage = 'struktur', reason = ?, updated_at = ?
+         WHERE id = ?`,
+        [
+          "Aufladung vom Hauptkonto — die Belastung dort ist bereits erfasst",
+          jetzt,
+          e.id,
+        ],
       );
       n++;
     }
-  })();
+  });
 
   return n;
+}
+
+export interface Deckungsluecke {
+  jahr: string;
+  aufgeladen: number;
+  erfassteAusgaben: number;
+  luecke: number;
 }
 
 /**
@@ -302,45 +303,32 @@ export function verknuepfeKontoAufladungen(): number {
  * aber nie importiert, verschwinden die Ausgaben spurlos aus der Auswertung.
  * Diese Prüfung macht genau diese Lücke sichtbar, statt sie zu verschweigen.
  */
-export interface Deckungsluecke {
-  jahr: string;
-  aufgeladen: number;
-  erfassteAusgaben: number;
-  luecke: number;
-}
-
-export function pruefeDeckung(): Deckungsluecke[] {
-  const verknuepft = getJsonSetting<string[]>(SETTING_KEYS.linkedIbans, []).map((i) =>
+export async function pruefeDeckung(): Promise<Deckungsluecke[]> {
+  const verknuepft = (await getJsonSetting<string[]>(SETTING_KEYS.linkedIbans, [])).map((i) =>
     i.replace(/\s/g, "").toUpperCase(),
   );
   if (verknuepft.length === 0) return [];
 
-  const db = getSqlite();
+  const db = await getDb();
   const platzhalter = verknuepft.map(() => "?").join(",");
 
   // Was floss vom Hauptkonto aufs verknüpfte Konto?
-  const aufgeladen = db
-    .prepare(
-      `SELECT substr(booking_date,1,4) AS jahr, SUM(ABS(amount)) AS summe
-       FROM transactions
-       WHERE source = 'camt053' AND amount < 0
-         AND counterparty_iban IN (${platzhalter})
-       GROUP BY jahr`,
-    )
-    .all(...verknuepft) as Array<{ jahr: string; summe: number }>;
+  const aufgeladen = await db.all<{ jahr: string; summe: number }>(
+    `SELECT substr(booking_date,1,4) AS jahr, SUM(ABS(amount)) AS summe
+     FROM transactions
+     WHERE source = 'camt053' AND amount < 0
+       AND counterparty_iban IN (${platzhalter})
+     GROUP BY jahr`,
+    verknuepft,
+  );
 
   // Was wurde von dort tatsächlich ausgegeben?
-  const ausgegeben = new Map(
-    (
-      db
-        .prepare(
-          `SELECT substr(booking_date,1,4) AS jahr, SUM(ABS(amount)) AS summe
-           FROM transactions WHERE source = 'neon' AND amount < 0
-           GROUP BY jahr`,
-        )
-        .all() as Array<{ jahr: string; summe: number }>
-    ).map((r) => [r.jahr, r.summe]),
+  const ausgegebenRows = await db.all<{ jahr: string; summe: number }>(
+    `SELECT substr(booking_date,1,4) AS jahr, SUM(ABS(amount)) AS summe
+     FROM transactions WHERE source = 'neon' AND amount < 0
+     GROUP BY jahr`,
   );
+  const ausgegeben = new Map(ausgegebenRows.map((r) => [r.jahr, r.summe]));
 
   return aufgeladen
     .map((a) => ({
@@ -362,38 +350,32 @@ export function pruefeDeckung(): Deckungsluecke[] {
  * aufhält. Ohne hinterlegten Schlüssel passiert schlicht nichts.
  */
 export async function ergaenzeMitKi(): Promise<number> {
-  const anbieter = getSetting(SETTING_KEYS.aiProvider) as KiAnbieter | null;
-  const apiKey = getSetting(SETTING_KEYS.aiApiKey);
+  const [anbieter, apiKey] = await Promise.all([
+    getSetting(SETTING_KEYS.aiProvider),
+    getSetting(SETTING_KEYS.aiApiKey),
+  ]);
   if (!anbieter || !apiKey) return 0;
 
-  const db = getSqlite();
-  const offen = db
-    .prepare(
-      `SELECT DISTINCT counterparty FROM transactions
-       WHERE reviewed = 0 AND counterparty IS NOT NULL
-         AND (category_slug IS NULL OR confidence < 0.75)
-         AND counterparty_phone IS NULL
-       LIMIT 40`,
-    )
-    .all() as Array<{ counterparty: string }>;
-
+  const db = await getDb();
+  const offen = await db.all<{ counterparty: string }>(
+    `SELECT DISTINCT counterparty FROM transactions
+     WHERE reviewed = 0 AND counterparty IS NOT NULL
+       AND (category_slug IS NULL OR confidence < 0.75)
+       AND counterparty_phone IS NULL
+     LIMIT 40`,
+  );
   if (offen.length === 0) return 0;
 
   const ergebnis = await frageKi(
     offen.map((o) => o.counterparty),
-    { anbieter, apiKey },
+    { anbieter: anbieter as KiAnbieter, apiKey },
   );
   if (ergebnis.size === 0) return 0;
 
-  const aktualisiere = db.prepare(
-    `UPDATE transactions
-     SET category_slug = ?, confidence = ?, stage = 'ki', reason = ?, updated_at = ?
-     WHERE counterparty = ? AND reviewed = 0 AND (category_slug IS NULL OR confidence < ?)`,
-  );
-
   let n = 0;
   const jetzt = new Date().toISOString();
-  db.transaction(() => {
+
+  await db.tx(async (t) => {
     for (const { counterparty } of offen) {
       const vorschlag = mitKiErgaenzen(
         { categorySlug: null, confidence: 0, stage: "unbekannt", reason: "" },
@@ -401,26 +383,31 @@ export async function ergaenzeMitKi(): Promise<number> {
         ergebnis,
       );
       if (vorschlag.stage !== "ki" || !vorschlag.categorySlug) continue;
-      aktualisiere.run(
-        vorschlag.categorySlug, vorschlag.confidence, vorschlag.reason,
-        jetzt, counterparty, vorschlag.confidence,
+
+      await t.run(
+        `UPDATE transactions
+         SET category_slug = ?, confidence = ?, stage = 'ki', reason = ?, updated_at = ?
+         WHERE counterparty = ? AND reviewed = 0 AND (category_slug IS NULL OR confidence < ?)`,
+        [
+          vorschlag.categorySlug, vorschlag.confidence, vorschlag.reason,
+          jetzt, counterparty, vorschlag.confidence,
+        ],
       );
       n++;
     }
-  })();
+  });
 
   return n;
 }
 
 /** Protokolliert einen Import, damit später nachvollziehbar ist, was hereinkam. */
-export function protokolliere(e: ImportErgebnis): void {
-  getSqlite()
-    .prepare(
-      `INSERT INTO imports (filename, source, imported_at, period_from, period_to,
-         new_count, duplicate_count, warnings)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+export async function protokolliere(e: ImportErgebnis): Promise<void> {
+  const db = await getDb();
+  await db.run(
+    `INSERT INTO imports (filename, source, imported_at, period_from, period_to,
+       new_count, duplicate_count, warnings)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       e.dateiname,
       e.quelle,
       new Date().toISOString(),
@@ -429,5 +416,6 @@ export function protokolliere(e: ImportErgebnis): void {
       e.neu,
       e.bekannt,
       e.warnungen.length ? JSON.stringify(e.warnungen) : null,
-    );
+    ],
+  );
 }

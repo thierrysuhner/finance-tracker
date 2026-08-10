@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
-import { getSqlite } from "@/db";
+import { getDb } from "@/db";
 
-/** Bereitschaftsprüfung für Docker und Reverse Proxy. */
+/** Bereitschaftsprüfung für Docker, Fly.io und Reverse Proxy. */
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
-    getSqlite().prepare("SELECT 1").get();
+    const db = await getDb();
+    await db.get("SELECT 1 AS ok");
     return NextResponse.json({ status: "ok" });
   } catch (e) {
     return NextResponse.json(

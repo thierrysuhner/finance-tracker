@@ -56,19 +56,19 @@ export function pruefePasswort(passwort: string, gespeichert: string): boolean {
   return crypto.timingSafeEqual(key, erwartet);
 }
 
-export function istEingerichtet(): boolean {
-  return getSetting(SETTING_KEYS.passwordHash) !== null;
+export async function istEingerichtet(): Promise<boolean> {
+  return (await getSetting(SETTING_KEYS.passwordHash)) !== null;
 }
 
-export function setzePasswort(passwort: string): void {
+export async function setzePasswort(passwort: string): Promise<void> {
   if (passwort.length < 10) {
     throw new Error("Das Passwort muss mindestens 10 Zeichen haben.");
   }
-  setSetting(SETTING_KEYS.passwordHash, hashPasswort(passwort));
+  await setSetting(SETTING_KEYS.passwordHash, hashPasswort(passwort));
 }
 
-export function passwortStimmt(passwort: string): boolean {
-  const gespeichert = getSetting(SETTING_KEYS.passwordHash);
+export async function passwortStimmt(passwort: string): Promise<boolean> {
+  const gespeichert = await getSetting(SETTING_KEYS.passwordHash);
   if (!gespeichert) return false;
   try {
     return pruefePasswort(passwort, gespeichert);
