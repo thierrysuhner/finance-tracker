@@ -42,10 +42,11 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# better-sqlite3 ist nativ und wird vom Standalone-Bündel nicht mitgenommen.
-COPY --from=deps --chown=nextjs:nodejs /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
-COPY --from=deps --chown=nextjs:nodejs /app/node_modules/bindings ./node_modules/bindings
-COPY --from=deps --chown=nextjs:nodejs /app/node_modules/file-uri-to-path ./node_modules/file-uri-to-path
+# Hinweis: better-sqlite3 muss NICHT separat kopiert werden. Next.js nimmt das
+# Paket samt kompilierter Binärdatei ins Standalone-Bündel auf — geprüft mit
+#   find .next/standalone/node_modules/better-sqlite3 -name '*.node'
+# Da das Bündel in derselben Alpine-Stufe entsteht, passt die Binärdatei zur
+# Laufzeitumgebung.
 
 # Die Datenbank liegt im Volume, nicht im Abbild — sonst wäre sie bei jedem
 # Update weg.

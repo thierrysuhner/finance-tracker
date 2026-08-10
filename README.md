@@ -129,7 +129,34 @@ Beim ersten Aufruf wird das Passwort gesetzt. Es gibt keine
 Zurücksetzen-Funktion — geht es verloren, hilft nur das Bearbeiten der
 Datenbankdatei.
 
-### Auf dem Server
+### Wo das laufen kann — und wo nicht
+
+Die Anwendung braucht zwei Dinge: eine Node-Laufzeit und **einen Ort, an dem
+die Datenbank bestehen bleibt**. Das schliesst zwei naheliegende Optionen aus:
+
+| Plattform | Geeignet? | Grund |
+|---|---|---|
+| **GitHub Pages** | nein | Liefert nur statische Dateien aus. Login, Server Actions und Datenbank haben dort keine Laufzeit. |
+| **Vercel** | nur mit Umbau | Das Dateisystem ist schreibgeschützt, `/tmp` wird bei jedem Kaltstart geleert. Die SQLite-Datei wäre regelmässig leer. Nötig wäre eine externe Datenbank (siehe unten). |
+| **Fly.io, Railway** | ja | Echtes Volume, SQLite bleibt unverändert. Deploy per Kommando wie bei Vercel. |
+| **Eigener Server / VPS** | ja | `docker compose up -d`. Volle Datenhoheit. |
+
+### Fly.io (empfohlen)
+
+Der bequemste Weg ohne Änderung am Code — die Konfiguration liegt in
+`fly.toml`:
+
+```bash
+fly launch --no-deploy --copy-config
+fly volumes create finanzen_daten --size 1 --region fra
+fly secrets set SESSION_SECRET="$(openssl rand -base64 48)"
+fly deploy
+```
+
+Danach genügt bei jeder Änderung `fly deploy`. Die Maschine fährt bei
+Inaktivität herunter und bei Zugriff in wenigen Sekunden wieder hoch.
+
+### Eigener Server
 
 ```bash
 echo "SESSION_SECRET=$(openssl rand -base64 48)" > .env
@@ -140,11 +167,34 @@ Der Dienst lauscht bewusst nur auf `127.0.0.1:3000`. Davor gehört ein Reverse
 Proxy mit HTTPS (Caddy, nginx, Traefik) — ohne Verschlüsselung wandert das
 Passwort im Klartext durchs Netz.
 
-**Backup** heisst: das Docker-Volume `finanzen-daten` sichern. Darin liegt eine
-einzige SQLite-Datei. Alles andere lässt sich jederzeit neu bauen.
+### Falls es unbedingt Vercel sein soll
 
-**Auf dem Handy** die Seite im Browser öffnen und "Zum Home-Bildschirm"
-wählen — die App läuft dann als eigenständiges Fenster ohne Browserleiste.
+Dann muss die Speicherschicht auf eine Datenbank umgestellt werden, die über
+das Netz erreichbar ist. **Turso** wäre der kleinste Eingriff, weil es ein
+SQLite-Abkömmling ist und jede vorhandene SQL-Anweisung gültig bleibt —
+einschliesslich `julianday()`, `MIN(0, x)` und `ON CONFLICT`, die bei
+PostgreSQL alle umgeschrieben werden müssten.
+
+Der Aufwand liegt woanders: `better-sqlite3` arbeitet synchron, ein
+Netzwerktreiber zwangsläufig asynchron. Betroffen sind **72 Aufrufstellen in
+10 Dateien**. Die Umstellung ist mechanisch, aber die Testabdeckung liegt
+heute auf der Fachlogik, nicht auf der Datenbankschicht — ein solcher Umbau
+sollte also von Tests für die Abfragen begleitet werden.
+
+### Backup
+
+Das Volume sichern — darin liegt eine einzige SQLite-Datei. Alles andere lässt
+sich jederzeit neu bauen.
+
+```bash
+docker compose exec finanzen sh -c 'cat /data/finance.db' > backup-$(date +%F).db
+# oder bei Fly.io:  fly ssh console -C 'cat /data/finance.db' > backup.db
+```
+
+### Auf dem Handy
+
+Die Seite im Browser öffnen und "Zum Home-Bildschirm" wählen — die App läuft
+dann als eigenständiges Fenster ohne Browserleiste.
 
 ### Prüfen
 
