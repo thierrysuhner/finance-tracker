@@ -53,10 +53,15 @@ export async function abmelden() {
  * Das Merken ist der eigentliche Punkt: dieselbe Zuordnung soll kein zweites
  * Mal nötig sein. Beim Setzen auf "alle künftigen" wird zusätzlich ein
  * Marken-Eintrag angelegt, der auch andere Filialen abdeckt.
+ *
+ * `vorgabe` kommt von den Schnellauswahl-Knöpfen und hat Vorrang vor dem
+ * Formularfeld. Der Umweg ist nötig, weil React bei einer Server Action weder
+ * den Namen noch den Wert des angeklickten Submit-Knopfes ins FormData
+ * übernimmt — ein Knopf muss seine Kategorie also gebunden mitgeben.
  */
-export async function ordneZu(formular: FormData) {
+export async function ordneZu(vorgabe: string | null, formular: FormData) {
   const id = Number(formular.get("id"));
-  const kategorie = String(formular.get("kategorie") ?? "");
+  const kategorie = vorgabe ?? String(formular.get("kategorie") ?? "");
   const merken = formular.get("merken") === "on" || formular.get("merken") === "true";
   const auchMarke = formular.get("auchMarke") === "on";
   const notwendigkeit = String(formular.get("notwendigkeit") ?? "");
