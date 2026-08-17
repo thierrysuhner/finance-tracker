@@ -23,7 +23,8 @@ export function ZuordnungsKarte({ buchung }: { buchung: OffeneBuchung }) {
   const vorschlaege = schnellauswahl(buchung, istEinnahme);
 
   return (
-    <form action={ordneZu} className="karte p-4">
+    // Ohne Vorgabe: die Kategorie kommt dann aus der Auswahlliste unten.
+    <form action={ordneZu.bind(null, null)} className="karte p-4">
       <input type="hidden" name="id" value={buchung.id} />
 
       <div className="flex items-start justify-between gap-3">
@@ -46,7 +47,11 @@ export function ZuordnungsKarte({ buchung }: { buchung: OffeneBuchung }) {
         </span>
       </div>
 
-      {/* Schnellauswahl */}
+      {/*
+        Schnellauswahl. Jeder Knopf bindet seine Kategorie an die Action —
+        über Name und Wert des Knopfes ginge sie verloren, React übernimmt
+        beides bei einer Server Action nicht ins FormData.
+      */}
       <div className="mt-3 flex flex-wrap gap-2">
         {vorschlaege.map((slug) => {
           const c = CATEGORY_BY_SLUG.get(slug)!;
@@ -55,8 +60,7 @@ export function ZuordnungsKarte({ buchung }: { buchung: OffeneBuchung }) {
             <button
               key={slug}
               type="submit"
-              name="kategorie"
-              value={slug}
+              formAction={ordneZu.bind(null, slug)}
               onClick={() => setGewaehlt(slug)}
               className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
               style={{
