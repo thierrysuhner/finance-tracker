@@ -135,7 +135,7 @@ export async function setzeZurueck(formular: FormData) {
 
   const db = await getDb();
   const zeile = await db.get<{ counterparty: string | null }>(
-    "SELECT counterparty FROM transactions WHERE id = ?",
+    "SELECT counterparty FROM transactions WHERE id = ? AND reviewed = 1",
     [id],
   );
   if (!zeile) return;
