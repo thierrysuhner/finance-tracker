@@ -5,7 +5,7 @@ import { CATEGORY_BY_SLUG } from "@/core/categorize/categories";
 import { Karte, KartenTitel, Etikett, Leer, monatName, kurzDatum } from "@/components/ui";
 import { MonatsWahl } from "@/components/MonatsWahl";
 import { ErfassungsFormular } from "./ErfassungsFormular";
-import { loescheBuchung } from "@/app/actions";
+import { loescheBuchung, setzeZurueck } from "@/app/actions";
 import type { Necessity } from "@/core/types";
 
 export const dynamic = "force-dynamic";
@@ -128,6 +128,24 @@ export default async function Buchungen({
                       </p>
                     )}
                   </div>
+
+                  {/*
+                    Zurücksetzen nur, wo tatsächlich eine Entscheidung liegt.
+                    Bei allem anderen gäbe es nichts rückgängig zu machen.
+                  */}
+                  {z.reviewed === 1 && (
+                    <form action={setzeZurueck}>
+                      <input type="hidden" name="id" value={z.id} />
+                      <button
+                        type="submit"
+                        title="Zuordnung zurücksetzen — die Buchung wandert zurück in die Prüfliste"
+                        aria-label={`Zuordnung von ${z.counterparty ?? "dieser Buchung"} zurücksetzen`}
+                        className="px-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                      >
+                        ↩
+                      </button>
+                    </form>
+                  )}
 
                   {z.source === "manual" && (
                     <form action={loescheBuchung}>

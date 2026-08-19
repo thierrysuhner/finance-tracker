@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb, setJsonSetting, setSetting, SETTING_KEYS } from "@/db";
-import { merkeZuordnung } from "@/server/context";
-import { importiere, protokolliere, ergaenzeMitKi } from "@/server/import";
+import { merkeZuordnung, vergissZuordnung } from "@/server/context";
+import { importiere, protokolliere, ergaenzeMitKi, kategorisiereNeu } from "@/server/import";
 import { setzeBudget, uebernehmeVorschlaege } from "@/server/budget";
 import {
   passwortStimmt, setzePasswort, erstelleSitzung, setzeSitzungsCookie,
@@ -112,6 +112,60 @@ export async function ordneZu(vorgabe: string | null, formular: FormData) {
     );
   }
 
+  revalidatePath("/pruefen");
+  revalidatePath("/");
+}
+
+/**
+ * Nimmt eine Zuordnung zurück.
+ *
+ * Eine Entscheidung wirkt an drei Stellen: auf der Buchung selbst, im
+ * Händler-Gedächtnis und auf allen offenen Buchungen desselben Händlers, die
+ * beim Zuordnen mitgezogen wurden. Nur die Buchung zurückzusetzen, brächte
+ * nichts — das Gedächtnis würde dieselbe Kategorie beim nächsten Einstufen
+ * sofort wieder vergeben. Deshalb alle drei zusammen.
+ *
+ * Zurückgesetzt wird nicht auf einen festen Wert, sondern auf das Ergebnis
+ * der automatischen Einstufung. Sonst würde aus einem Eigenübertrag beim
+ * Zurücksetzen eine Ausgabe, und die Monatssumme stimmte nicht mehr.
+ */
+export async function setzeZurueck(formular: FormData) {
+  const id = Number(formular.get("id"));
+  if (!id) return;
+
+  const db = await getDb();
+  const zeile = await db.get<{ counterparty: string | null }>(
+    "SELECT counterparty FROM transactions WHERE id = ?",
+    [id],
+  );
+  if (!zeile) return;
+
+  // Erst vergessen, dann neu einstufen — sonst griffe die eigene Entscheidung
+  // sofort wieder.
+  if (zeile.counterparty) await vergissZuordnung(zeile.counterparty);
+
+  // Die mitgezogenen Buchungen desselben Händlers gehören dazu. Sie tragen
+  // die Begründung aus ordneZu und wurden nie einzeln bestätigt.
+  const mitgezogen = zeile.counterparty
+    ? await db.all<{ id: number }>(
+        `SELECT id FROM transactions
+         WHERE counterparty = ? AND id != ? AND reviewed = 0
+           AND reason = 'Aus deiner Zuordnung übernommen'`,
+        [zeile.counterparty, id],
+      )
+    : [];
+
+  await kategorisiereNeu([id, ...mitgezogen.map((m) => m.id)]);
+
+  // Ein verrechneter Eingang hing an dieser Buchung — die Verknüpfung zeigt
+  // sonst auf eine Zuordnung, die es nicht mehr gibt.
+  await db.run(
+    `UPDATE transactions SET offset_of = NULL, treatment = 'normal', reviewed = 0,
+     updated_at = ? WHERE offset_of = ?`,
+    [new Date().toISOString(), id],
+  );
+
+  revalidatePath("/buchungen");
   revalidatePath("/pruefen");
   revalidatePath("/");
 }

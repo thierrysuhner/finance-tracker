@@ -419,3 +419,81 @@ export async function protokolliere(e: ImportErgebnis): Promise<void> {
     ],
   );
 }
+
+/**
+ * Stuft bereits gespeicherte Buchungen erneut automatisch ein.
+ *
+ * Der ehrliche Weg, eine Zuordnung zurückzunehmen: nicht auf feste Werte
+ * setzen, sondern genau das Ergebnis herstellen, das der Import heute
+ * liefern würde. Nur so bleibt ein Eigenübertrag neutral, statt nach dem
+ * Zurücksetzen als Ausgabe zu zählen.
+ *
+ * Der Kontext wird einmal geladen und für alle Zeilen benutzt — er ist
+ * bereits um die vergessene Entscheidung bereinigt, wenn der Aufrufer sie
+ * vorher gelöscht hat.
+ */
+export async function kategorisiereNeu(ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+
+  const db = await getDb();
+  const ctx = await ladeKontext();
+  const jetzt = new Date().toISOString();
+
+  const platzhalter = ids.map(() => "?").join(",");
+  const zeilen = await db.all<Record<string, any>>(
+    `SELECT id, external_id, source, account_ref, card_ref, booking_date, value_date,
+            amount, currency, fx_currency, fx_amount, raw_text, counterparty,
+            counterparty_iban, counterparty_phone, tx_time, place, issuer_category,
+            issuer_mcc, bank_tx_code
+     FROM transactions WHERE id IN (${platzhalter})`,
+    ids,
+  );
+
+  let n = 0;
+  await db.tx(async (t: SqlRunner) => {
+    for (const z of zeilen) {
+      const tx: ParsedTransaction = {
+        externalId: z.external_id,
+        source: z.source,
+        accountRef: z.account_ref,
+        cardRef: z.card_ref ?? undefined,
+        bookingDate: z.booking_date,
+        valueDate: z.value_date ?? undefined,
+        amount: z.amount,
+        currency: z.currency,
+        fxCurrency: z.fx_currency ?? undefined,
+        fxAmount: z.fx_amount ?? undefined,
+        rawText: z.raw_text ?? "",
+        counterparty: z.counterparty ?? undefined,
+        counterpartyIban: z.counterparty_iban ?? undefined,
+        counterpartyPhone: z.counterparty_phone ?? undefined,
+        txTime: z.tx_time ?? undefined,
+        place: z.place ?? undefined,
+        issuerCategory: z.issuer_category ?? undefined,
+        issuerMcc: z.issuer_mcc ?? undefined,
+        bankTxCode: z.bank_tx_code ?? undefined,
+      };
+
+      const v = categorize(tx, ctx);
+      await t.run(
+        `UPDATE transactions
+         SET category_slug = ?, treatment = ?, confidence = ?, stage = ?,
+             reason = ?, necessity_override = NULL, offset_of = NULL,
+             reviewed = 0, updated_at = ?
+         WHERE id = ?`,
+        [
+          v.categorySlug,
+          v.treatment ?? "normal",
+          v.confidence,
+          v.stage,
+          v.reason,
+          jetzt,
+          z.id,
+        ],
+      );
+      n++;
+    }
+  });
+
+  return n;
+}

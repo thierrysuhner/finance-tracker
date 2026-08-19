@@ -112,9 +112,29 @@ export async function merkeZuordnung(
   }
 }
 
-export async function vergissZuordnung(counterparty: string): Promise<void> {
+/**
+ * Nimmt eine gemerkte Zuordnung zurück.
+ *
+ * Beide Schlüssel müssen weg: wurde beim Zuordnen "auch für andere Filialen"
+ * gesetzt, liegt zusätzlich ein Marken-Eintrag vor. Bliebe der stehen, käme
+ * dieselbe Kategorie beim nächsten Einstufen sofort zurück und das
+ * Zurücksetzen liefe ins Leere.
+ *
+ * Nur von Hand getroffene Entscheidungen werden vergessen. Was das Tool aus
+ * der Kartenhistorie gelernt hat, bleibt — das hat der Nutzer nie behauptet.
+ */
+export async function vergissZuordnung(counterparty: string): Promise<number> {
   const db = await getDb();
-  await db.run("DELETE FROM merchant_memory WHERE key = ?", [
-    memoryKey("exakt", merchantKey(counterparty)),
-  ]);
+  const exakt = merchantKey(counterparty);
+  const marke = brandKey(counterparty);
+
+  const schluessel = [memoryKey("exakt", exakt)];
+  if (marke && marke !== exakt) schluessel.push(memoryKey("marke", marke));
+
+  const treffer = await db.run(
+    `DELETE FROM merchant_memory
+     WHERE manual = 1 AND key IN (${schluessel.map(() => "?").join(",")})`,
+    schluessel,
+  );
+  return treffer.changes;
 }
